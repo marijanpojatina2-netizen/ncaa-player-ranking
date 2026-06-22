@@ -72,6 +72,18 @@ def _proxied(template: str, target: str) -> str:
     return template.replace("{url}", quote(target, safe=""))
 
 
+def _looks_like_csv(text: str) -> bool:
+    """Reject HTML/error/markdown bodies so a bad proxy falls through to the
+    next candidate (and we never cache a CloudFront block page as 'data')."""
+    head = text.lstrip()[:1500].lower()
+    if head.startswith("<") or "<html" in head or "<!doctype" in head:
+        return False
+    if "request could not be satisfied" in head or "access denied" in head:
+        return False
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    return first.count(",") >= 3
+
+
 def fetch(
     url: str,
     params: Optional[dict] = None,
@@ -94,7 +106,8 @@ def fetch(
         return cache_file.read_text(encoding="utf-8", errors="replace")
 
     target = _build_target(url, params)
-    if PROXY_TEMPLATES and PROXY_HOST in url:
+    use_proxy = bool(PROXY_TEMPLATES) and PROXY_HOST in url
+    if use_proxy:
         candidates = [_proxied(t, target) for t in PROXY_TEMPLATES]
         timeout = max(TIMEOUT, 60)  # read proxies can be slow
     else:
@@ -102,6 +115,10 @@ def fetch(
         timeout = TIMEOUT
 
     req_headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
+    if use_proxy:
+        # Ask r.jina.ai for the raw page text instead of reformatted markdown
+        # (harmless to the other proxies, which ignore it).
+        req_headers["X-Return-Format"] = "text"
     if headers:
         req_headers.update(headers)
 
@@ -119,6 +136,8 @@ def fetch(
                 text = resp.text
                 if not text.strip():
                     raise RuntimeError("empty response body")
+                if use_proxy and not _looks_like_csv(text):
+                    raise RuntimeError("non-CSV/blocked response (proxy)")
                 cache_file.write_text(text, encoding="utf-8")
                 return text
             except Exception as exc:  # network error, HTTP error, timeout

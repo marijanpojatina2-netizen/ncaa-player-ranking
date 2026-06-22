@@ -1,2 +1,2 @@
 Touch this file (change anything) and push to main to trigger a DB rebuild.
-Last trigger: 2026-06-22T23:21:21Z  (proxy bypass for Torvik 403 + extended inspect)
+Last trigger: 2026-06-22T23:39:39Z  (jina proxy + CSV validation + fail-on-empty)

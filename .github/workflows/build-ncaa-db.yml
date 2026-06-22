@@ -35,9 +35,12 @@ permissions:
 env:
   SEASONS: ${{ github.event.inputs.seasons || '2023 2024 2025 2026' }}
   REFRESH: ${{ github.event.inputs.refresh || 'false' }}
-  # barttorvik blocks GitHub-runner IPs (HTTP 403); route ONLY its requests
-  # through server-side read proxies (tried in order). ESPN is fetched directly.
-  FETCH_PROXIES: "https://api.allorigins.win/raw?url={url} https://api.codetabs.com/v1/proxy/?quest={url} https://corsproxy.io/?url={url} https://r.jina.ai/{rawurl}"
+  # barttorvik sits behind CloudFront, which blocks datacenter IPs (GitHub
+  # runners AND plain CORS proxies) with HTTP 403 / error pages. r.jina.ai
+  # renders with a real browser so it gets through; allorigins is a fallback.
+  # Responses are validated as CSV (see common._looks_like_csv) so a blocked
+  # HTML page is rejected rather than cached. ESPN is fetched directly.
+  FETCH_PROXIES: "https://r.jina.ai/{rawurl} https://api.allorigins.win/raw?url={url}"
 
 jobs:
   build:

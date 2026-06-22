@@ -275,6 +275,11 @@ def ingest(season: int, refresh: bool = False) -> None:
     init_db()
     print(f"[torvik] ingesting D1 players for {season} (refresh={refresh}) ...")
     players = fetch_players(season, refresh)
+    if not players:
+        raise RuntimeError(
+            f"Torvik returned no players for {season} (likely blocked/non-CSV). "
+            "Refusing to commit empty data."
+        )
     n = upsert_players(players)
     print(f"[torvik] wrote {n} D1 player rows")
     build_conferences(season, refresh)
