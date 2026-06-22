@@ -1,2 +1,2 @@
 Touch this file (change anything) and push to main to trigger a DB rebuild.
-Last trigger: 2026-06-22T21:36:53Z  (map per-game Torvik tail columns + fix position)
+Last trigger: 2026-06-22T21:45:01Z  (retry after Torvik 403; per-game mapping)
