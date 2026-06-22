@@ -1,0 +1,15 @@
+{
+  "_comment": "Positional column overrides for Bart Torvik getadvstats.php?csv=1 (verified from the 2026 --inspect dump, 67-column layout). player_tail maps the high-drift per-game box columns; oreb+dreb=reb at 57/58/59 anchors the mapping. 'position' is corrected from 33 (hometown) to 64 (Torvik position type).",
+  "player": {
+    "position": 64
+  },
+  "player_tail": {
+    "oreb_pg": 57,
+    "dreb_pg": 58,
+    "reb_pg": 59,
+    "ast_pg": 60,
+    "stl_pg": 61,
+    "blk_pg": 62,
+    "pts_pg": 63
+  }
+}

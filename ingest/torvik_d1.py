@@ -126,9 +126,10 @@ def inspect(season: int, refresh: bool, what: str = "player") -> None:
     text = fetch(url, {"year": season, "csv": 1}, refresh=refresh)
     rows = _parse_csv(text)
     print(f"[inspect] {url} season={season}: {len(rows)} rows")
-    if rows:
-        sample = rows[0]
-        print(f"[inspect] first row has {len(sample)} columns:")
+    # Print the first few data rows so column positions (esp. the high-drift
+    # per-game tail) can be cross-checked against more than one player.
+    for r, sample in enumerate(rows[:3]):
+        print(f"[inspect] row {r} has {len(sample)} columns:")
         for i, val in enumerate(sample):
             print(f"  [{i:>3}] {val!r}")
 
