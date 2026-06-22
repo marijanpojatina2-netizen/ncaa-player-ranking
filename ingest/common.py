@@ -108,8 +108,11 @@ def fetch(
     target = _build_target(url, params)
     use_proxy = bool(PROXY_TEMPLATES) and PROXY_HOST in url
     if use_proxy:
-        candidates = [_proxied(t, target) for t in PROXY_TEMPLATES]
-        timeout = max(TIMEOUT, 60)  # read proxies can be slow
+        # Try a direct hit first (fast and reliable whenever the CloudFront
+        # block has lifted), then fall back to the read proxies. (connect, read)
+        # timeout caps stalls so a wedged proxy can't hang the whole build.
+        candidates = [target] + [_proxied(t, target) for t in PROXY_TEMPLATES]
+        timeout = (10, 45)
     else:
         candidates = [target]
         timeout = TIMEOUT
