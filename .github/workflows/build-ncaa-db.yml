@@ -1,0 +1,62 @@
+name: Build NCAA database
+
+# Manual, one-time-ish build. GitHub-hosted runners have open internet, so the
+# scrape of Bart Torvik + ESPN rosters runs here even on accounts without a VPS.
+# The finished SQLite DB and a portable JSON export are committed back to the
+# branch. The data is concluded, so this is NOT scheduled — run it from the
+# Actions tab ("Run workflow") when you want to (re)build a season.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "Seasons to scrape (space-separated, Torvik year convention)"
+        required: true
+        default: "2023 2024 2025 2026"
+      refresh:
+        description: "Bypass HTTP cache"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Inspect Torvik column layout (sanity log)
+        run: python -m ingest.torvik_d1 --season $(echo "${{ github.event.inputs.seasons }}" | awk '{print $NF}') --inspect || true
+
+      - name: Scrape Torvik (multi-season)
+        run: |
+          REFRESH=""
+          if [ "${{ github.event.inputs.refresh }}" = "true" ]; then REFRESH="--refresh"; fi
+          python -m ingest.torvik_d1 --seasons ${{ github.event.inputs.seasons }} $REFRESH
+
+      - name: Enrich with ESPN rosters (position/height/weight)
+        run: python -m ingest.espn_roster --seasons ${{ github.event.inputs.seasons }} || echo "ESPN enrichment failed (non-fatal)"
+
+      - name: Export portable JSON
+        run: python -m ingest.export_json
+
+      - name: Commit built database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/ncaa.db web/data.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: build NCAA DB for seasons ${{ github.event.inputs.seasons }}"
+            git push
+          fi

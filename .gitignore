@@ -1,0 +1,12 @@
+# Generated data — built locally or by the GitHub Action
+data/ncaa.db
+data/ncaa.db-wal
+data/ncaa.db-shm
+data/cache/*
+!data/cache/.gitkeep
+web/data.json
+
+__pycache__/
+*.pyc
+.venv/
+venv/

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NCAA Player Ranking Search</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator_midnight.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+  <style>
+    body { background:#0f172a; color:#e2e8f0; }
+    .slider-row input[type=range]{ width:100%; }
+    .chip { background:#1e293b; border:1px solid #334155; }
+    .tabulator { font-size:12px; }
+    details > summary { cursor:pointer; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <header class="px-4 py-3 border-b border-slate-700 flex items-center justify-between flex-wrap gap-2">
+    <div>
+      <h1 class="text-xl font-bold">🏀 NCAA Player Ranking Search <span class="text-slate-400 text-sm font-normal">Division I scouting</span></h1>
+      <p id="freshness" class="text-xs text-slate-400"></p>
+    </div>
+    <div class="flex gap-2">
+      <button id="exportBtn" class="chip px-3 py-2 rounded text-sm hover:bg-slate-700">⬇ Export CSV</button>
+      <button id="shareBtn" class="chip px-3 py-2 rounded text-sm hover:bg-slate-700">🔗 Copy share link</button>
+    </div>
+  </header>
+
+  <div class="flex flex-col lg:flex-row">
+    <!-- Filters + sliders panel -->
+    <aside class="lg:w-96 w-full p-4 border-r border-slate-700 space-y-4 overflow-y-auto" style="max-height:calc(100vh - 64px)">
+      <section class="space-y-2">
+        <h2 class="font-semibold text-slate-200">Filters</h2>
+        <label class="block text-xs">Season
+          <select id="season" class="chip w-full rounded px-2 py-1 mt-1"></select>
+        </label>
+        <div>
+          <span class="text-xs">Class <span class="text-slate-500">(default Senior)</span></span>
+          <div id="classes" class="flex gap-3 mt-1 text-sm flex-wrap"></div>
+        </div>
+        <label class="block text-xs">Conference <span class="text-slate-500">(strength shown; ctrl/cmd-click to multi-select)</span>
+          <select id="conference" multiple size="6" class="chip w-full rounded px-2 py-1 mt-1 text-xs"></select>
+        </label>
+        <label class="block text-xs">Position contains
+          <input id="position" type="text" placeholder="e.g. PG, Wing, C" class="chip w-full rounded px-2 py-1 mt-1" />
+        </label>
+        <div class="grid grid-cols-3 gap-2">
+          <label class="block text-xs">Min GP<input id="min_gp" type="number" min="0" class="chip w-full rounded px-2 py-1 mt-1" /></label>
+          <label class="block text-xs">Min MPG<input id="min_minutes" type="number" min="0" class="chip w-full rounded px-2 py-1 mt-1" /></label>
+          <label class="block text-xs">Min ConfStr<input id="min_conf_strength" type="number" min="0" max="1" step="0.05" class="chip w-full rounded px-2 py-1 mt-1" /></label>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="block text-xs">Min height (in)<input id="min_height_in" type="number" min="60" max="90" class="chip w-full rounded px-2 py-1 mt-1" placeholder="e.g. 75" /></label>
+          <label class="block text-xs">Max height (in)<input id="max_height_in" type="number" min="60" max="90" class="chip w-full rounded px-2 py-1 mt-1" /></label>
+        </div>
+        <label class="block text-xs">NULL metric handling
+          <select id="null_policy" class="chip w-full rounded px-2 py-1 mt-1">
+            <option value="exclude">Exclude from that player's score (default)</option>
+            <option value="median">Treat as median (50th pct)</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="space-y-2">
+        <h2 class="font-semibold text-slate-200">Presets</h2>
+        <div id="presets" class="flex flex-wrap gap-2"></div>
+      </section>
+
+      <section class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-slate-200">Weights (0–100)</h2>
+          <button id="resetWeights" class="text-xs underline text-slate-400">Reset all to 0</button>
+        </div>
+        <div id="sliders" class="space-y-2"></div>
+      </section>
+    </aside>
+
+    <!-- Results -->
+    <main class="flex-1 p-4">
+      <div id="status" class="text-sm text-slate-400 mb-2"></div>
+      <div id="detail" class="hidden mb-3 p-3 chip rounded"></div>
+      <div id="table"></div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
