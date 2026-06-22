@@ -282,7 +282,13 @@ def ingest(season: int, refresh: bool = False) -> None:
         )
     n = upsert_players(players)
     print(f"[torvik] wrote {n} D1 player rows")
-    build_conferences(season, refresh)
+    # Conference-strength aggregation needs trank.php, which the proxies often
+    # cannot return as CSV. It's a secondary feature, so never let it sink an
+    # otherwise-successful player ingest.
+    try:
+        build_conferences(season, refresh)
+    except Exception as exc:
+        print(f"[torvik] conference strength skipped for {season}: {exc}")
     _sanity_check(season)
 
 

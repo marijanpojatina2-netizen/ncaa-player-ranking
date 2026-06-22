@@ -1,2 +1,2 @@
 Touch this file (change anything) and push to main to trigger a DB rebuild.
-Last trigger: 2026-06-22T23:39:39Z  (jina proxy + CSV validation + fail-on-empty)
+Last trigger: 2026-06-22T23:47:22Z  (non-fatal conf-strength + min_pg/drtg/bpm mapping)

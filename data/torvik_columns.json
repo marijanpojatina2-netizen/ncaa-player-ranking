@@ -1,5 +1,5 @@
 {
-  "_comment": "Positional column overrides for Bart Torvik getadvstats.php?csv=1 (verified from the 2026 --inspect dump, 67-column layout). player_tail maps the high-drift per-game box columns; oreb+dreb=reb at 57/58/59 anchors the mapping. 'position' is corrected from 33 (hometown) to 64 (Torvik position type).",
+  "_comment": "Positional column overrides for Bart Torvik getadvstats.php?csv=1 (67-col layout, verified from 2026 --inspect dumps incl. top scorers AJ Dybantsa/Dior Johnson/Jordan Riley). Per-game box columns at 57-63 anchored by oreb+dreb=reb. min_pg(54): min_pct~=min_pg*0.4 for full-season players. drtg(47): ordered by defensive quality. bpm(28): signed, ordered by impact (col 48 is PORPAG, always >=0). position corrected 33(hometown)->64(type). fg_pct/tov_pg/dunk_rate/rim_rate are not isolated columns in this export and stay NULL.",
   "player": {
     "position": 64
   },
@@ -10,6 +10,9 @@
     "ast_pg": 60,
     "stl_pg": 61,
     "blk_pg": 62,
-    "pts_pg": 63
+    "pts_pg": 63,
+    "min_pg": 54,
+    "drtg": 47,
+    "bpm": 28
   }
 }
