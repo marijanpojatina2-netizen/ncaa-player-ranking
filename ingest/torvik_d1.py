@@ -133,6 +133,24 @@ def inspect(season: int, refresh: bool, what: str = "player") -> None:
         for i, val in enumerate(sample):
             print(f"  [{i:>3}] {val!r}")
 
+    # Also dump the top scorers (by the per-game points column, index 63 in the
+    # observed layout). High-volume starters make the remaining tail metrics
+    # (min/tov per game, DRtg, BPM, FG%, dunk/rim rate) unambiguous to map.
+    def _num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return float("-inf")
+
+    pts_idx = 63
+    if rows and len(rows[0]) > pts_idx:
+        top = sorted(rows, key=lambda r: _num(r[pts_idx]) if len(r) > pts_idx else float("-inf"),
+                     reverse=True)[:3]
+        for r, sample in enumerate(top):
+            print(f"[inspect] TOP-SCORER {r} name={sample[0]!r} col{pts_idx}={sample[pts_idx]!r}:")
+            for i, val in enumerate(sample):
+                print(f"  [{i:>3}] {val!r}")
+
 
 def fetch_players(season: int, refresh: bool) -> list[dict]:
     _apply_override()

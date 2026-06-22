@@ -11,10 +11,12 @@ Scraping etiquette (REQUIRED by project brief):
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -29,6 +31,15 @@ USER_AGENT = (
 MIN_DELAY = 1.5          # seconds between live requests
 MAX_RETRIES = 4
 TIMEOUT = 30
+
+# barttorvik.com intermittently blocks datacenter IPs (e.g. GitHub-hosted
+# runners) with HTTP 403. When that happens we route ONLY barttorvik requests
+# through a server-side "read" proxy that fetches the page from its own IP and
+# returns the body. Configure via the FETCH_PROXIES env var: a space-separated
+# list of templates tried in order. Use "{url}" for a URL-encoded target or
+# "{rawurl}" for the raw target. Empty (default) -> always fetch directly.
+PROXY_HOST = "barttorvik.com"
+PROXY_TEMPLATES = [t for t in os.environ.get("FETCH_PROXIES", "").split() if t]
 
 _last_request_ts = 0.0
 
@@ -47,6 +58,20 @@ def _cache_key(url: str, params: Optional[dict]) -> Path:
     return CACHE_DIR / f"{host}_{h}.cache"
 
 
+def _build_target(url: str, params: Optional[dict]) -> str:
+    """Fold query params into the URL (so it can be handed to a proxy)."""
+    if not params:
+        return url
+    sep = "&" if "?" in url else "?"
+    return url + sep + urlencode(params)
+
+
+def _proxied(template: str, target: str) -> str:
+    if "{rawurl}" in template:
+        return template.replace("{rawurl}", target)
+    return template.replace("{url}", quote(target, safe=""))
+
+
 def fetch(
     url: str,
     params: Optional[dict] = None,
@@ -57,8 +82,9 @@ def fetch(
 ) -> str:
     """Fetch a URL with on-disk caching, rate-limiting and backoff.
 
-    Returns the response body as text. Raises requests.HTTPError on persistent
-    failure (after retries) when no cache is available.
+    Returns the response body as text. Raises RuntimeError on persistent
+    failure (after retries) when no cache is available. barttorvik requests are
+    routed through FETCH_PROXIES (if configured) to dodge datacenter-IP blocks.
     """
     global _last_request_ts
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,10 +93,13 @@ def fetch(
     if cache_file.exists() and not refresh:
         return cache_file.read_text(encoding="utf-8", errors="replace")
 
-    # Rate-limit live requests.
-    elapsed = time.time() - _last_request_ts
-    if elapsed < min_delay:
-        time.sleep(min_delay - elapsed)
+    target = _build_target(url, params)
+    if PROXY_TEMPLATES and PROXY_HOST in url:
+        candidates = [_proxied(t, target) for t in PROXY_TEMPLATES]
+        timeout = max(TIMEOUT, 60)  # read proxies can be slow
+    else:
+        candidates = [target]
+        timeout = TIMEOUT
 
     req_headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
     if headers:
@@ -78,18 +107,26 @@ def fetch(
 
     last_exc: Optional[Exception] = None
     for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.get(url, params=params, headers=req_headers, timeout=TIMEOUT)
-            _last_request_ts = time.time()
-            resp.raise_for_status()
-            text = resp.text
-            cache_file.write_text(text, encoding="utf-8")
-            return text
-        except Exception as exc:  # network error, HTTP error, timeout
-            last_exc = exc
-            wait = 2 ** (attempt + 1)  # 2,4,8,16
-            print(f"  [fetch] attempt {attempt + 1}/{MAX_RETRIES} failed for {url}: {exc}; retrying in {wait}s")
-            time.sleep(wait)
+        for cand in candidates:
+            # Rate-limit live requests.
+            elapsed = time.time() - _last_request_ts
+            if elapsed < min_delay:
+                time.sleep(min_delay - elapsed)
+            try:
+                resp = requests.get(cand, headers=req_headers, timeout=timeout)
+                _last_request_ts = time.time()
+                resp.raise_for_status()
+                text = resp.text
+                if not text.strip():
+                    raise RuntimeError("empty response body")
+                cache_file.write_text(text, encoding="utf-8")
+                return text
+            except Exception as exc:  # network error, HTTP error, timeout
+                last_exc = exc
+                _last_request_ts = time.time()
+                print(f"  [fetch] {cand[:90]} failed (attempt {attempt + 1}/{MAX_RETRIES}): {exc}")
+        wait = 2 ** (attempt + 1)  # 2,4,8,16
+        time.sleep(wait)
 
     # Fall back to stale cache if we have any.
     if cache_file.exists():
