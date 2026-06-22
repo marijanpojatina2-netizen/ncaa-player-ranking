@@ -7,8 +7,10 @@ name: Build NCAA database
 #
 # Two ways to run it:
 #   * Actions tab -> "Run workflow" (workflow_dispatch), or
-#   * push a tag matching build-db-*  (handy when you only have a phone:
-#       a tag push fires the build, which then commits the data back to main).
+#   * push a commit that touches .github/build-trigger on main (handy when you
+#     only have a phone: editing that file fires the build, which then commits
+#     the data back to main). The data commit itself does not touch the trigger
+#     file, so it never re-triggers the workflow.
 
 on:
   workflow_dispatch:
@@ -22,8 +24,9 @@ on:
         type: boolean
         default: false
   push:
-    tags:
-      - "build-db-*"
+    branches: [main]
+    paths:
+      - ".github/build-trigger"
 
 permissions:
   contents: write
