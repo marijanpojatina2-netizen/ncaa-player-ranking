@@ -42,12 +42,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          # D2 ingest only: official NCAA scraper (pulls in pandas/bs4/lxml).
-          pip install "ncaa_stats_py>=0.0.12"
+        run: pip install -r requirements.txt
 
-      - name: Scrape NCAA D2 (stats.ncaa.org)
+      - name: Scrape NCAA D2 (ncaa.com leaderboards)
         run: python -m ingest.ncaa_d2 --seasons $SEASONS
 
       - name: Export portable D2 JSON

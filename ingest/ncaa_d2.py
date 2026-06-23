@@ -1,35 +1,61 @@
-"""Division II ingestion from the official NCAA stats portal (stats.ncaa.org).
+"""Division II ingestion from ncaa.com's official stat leaderboards.
 
-Unlike D1 (Bart Torvik), there is NO free advanced-metric source for D2. So we
-pull the official **box-score season stats** for every D2 team and compute the
-shooting-efficiency metrics (eFG%, TS%) ourselves. Fields that only exist in
-paid feeds (BPM, usage, ORtg/DRtg, conference strength, ast%/reb% rates) are
-stored as NULL — we never fabricate stats.
+There is NO free advanced-metric source for D2, and the complete portal
+(stats.ncaa.org) is behind bot-protection that blocks servers. ncaa.com's public
+stat pages ARE reachable, and expose per-category leaderboards as clean JSON via
+the ncaa-api proxy (henrygd). We fetch ~12 individual categories, merge them per
+player (by name + team), and compute shooting efficiency (eFG%, TS%) ourselves.
 
-Source: stats.ncaa.org, via the maintained ``ncaa_stats_py`` library:
-  * ``get_basketball_teams(season, level=2)``        -> every D2 team + team_id
-  * ``get_basketball_player_season_stats(team_id)``  -> per-player season totals
+Limitations (be honest):
+  * Only players who QUALIFY for a leaderboard appear (NCAA minimums), i.e. the
+    better/higher-minute D2 players — not every roster player.
+  * A player only carries the stats for the leaderboards they ranked in, so a
+    pure scorer may have NULL rebounds, etc. Multi-category players are richest.
+  * Advanced metrics (BPM, usage, ORtg/DRtg, rate%) don't exist free for D2 ->
+    stored as NULL. We never fabricate stats.
+  * ncaa.com only serves the CURRENT season, so D2 is a single season.
 
-The library returns SEASON TOTALS plus a few computed rate columns; we divide by
-games played for per-game values and keep percentages.
-
-IMPORTANT — where this runs
----------------------------
-stats.ncaa.org must be reachable. Sandboxed/proxied environments that block
-ncaa.org cannot fetch it; run this on a host with open internet (e.g. the
-GitHub Actions runner used by .github/workflows/build-d2.yml).
+Source: https://ncaa-api.henrygd.me  (mirrors www.ncaa.com/stats/...).
+Reachable from GitHub runners; blocked from the sandbox proxy.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import time
 import unicodedata
 from typing import Optional
+
+import requests
 
 from app.db import get_conn, init_db
 from ingest.common import normalize_class, parse_height_to_inches, to_float, utcnow_iso
 
-# These match the D1 ingest so the same DB/JSON consumers work unchanged.
+API_BASE = os.environ.get("NCAA_API_BASE", "https://ncaa-api.henrygd.me")
+UA = {"User-Agent": "Mozilla/5.0 ncaa-scouting-tool/1.0 (personal scouting use)"}
+DELAY = float(os.environ.get("NCAA_API_DELAY", "0.4"))
+
+# Each individual category -> {our_field_or_tmpkey: ncaa_column}. Temp keys start
+# with "_" and are used only to compute efficiency; they are not stored directly.
+# NB: column NAMES collide across categories (e.g. "RPG" means total/off/def in
+# 137/856/858), so we map explicitly per category rather than blindly merging.
+CAT_MAP: dict[int, dict[str, str]] = {
+    136: {"pts_pg": "PPG", "_fgm": "FGM", "_3fg": "3FG", "_ft": "FT", "_pts": "PTS"},
+    137: {"reb_pg": "RPG"},
+    140: {"ast_pg": "APG"},
+    139: {"stl_pg": "STPG"},
+    138: {"blk_pg": "BKPG"},
+    628: {"min_pg": "MPG"},
+    141: {"fg_pct": "FG%", "_fgm": "FGM", "_fga": "FGA"},
+    142: {"ft_pct": "FT%", "_fta": "FTA"},
+    143: {"fg3_pct": "3FG%", "_3fga": "3FGA"},
+    856: {"oreb_pg": "RPG"},
+    858: {"dreb_pg": "RPG"},
+    473: {"_ast": "AST", "_to": "TO"},
+}
+IDENTITY = ("Name", "Team", "Cl", "Height", "Position", "G")
+
 PLAYER_FIELDS = [
     "name", "team", "conference", "division", "class", "position", "season",
     "gp", "min_pg", "min_pct", "pts_pg", "reb_pg", "oreb_pg", "dreb_pg",
@@ -41,167 +67,151 @@ PLAYER_FIELDS = [
 ]
 
 
-def _slug(name: str) -> str:
-    """Stable, accent-folded key used to link a player's seasons in the UI.
-
-    stats.ncaa.org issues a fresh player_id every season, so we key career
-    history on the normalized name instead (good enough for D2 grouping)."""
+def _slug(name: str) -> Optional[str]:
     s = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
     return f"ncaa-{s}" if s else None
 
 
-def _g(row: dict, *keys):
-    """First present, non-empty value among possible column spellings."""
-    for k in keys:
-        if k in row and row[k] is not None:
-            return row[k]
-    return None
+def _fetch_category(div: str, cid: int) -> list[dict]:
+    """Fetch every page of one leaderboard category."""
+    rows: list[dict] = []
+    page, pages = 1, 1
+    while page <= pages:
+        url = f"{API_BASE}/stats/basketball-men/{div}/current/individual/{cid}"
+        last = None
+        for attempt in range(3):
+            try:
+                r = requests.get(url, params={"page": page}, headers=UA, timeout=(10, 60))
+                if r.status_code == 200:
+                    j = r.json()
+                    pages = int(j.get("pages") or 1)
+                    rows.extend(j.get("data", []))
+                    break
+                last = f"HTTP {r.status_code}"
+            except Exception as exc:
+                last = f"{type(exc).__name__}: {exc}"
+            time.sleep(1.5 * (attempt + 1))
+        else:
+            print(f"[ncaa-d2]   category {cid} page {page} failed: {last}")
+            break
+        page += 1
+        time.sleep(DELAY)
+    return rows
 
 
-def _per_game(total, gp) -> Optional[float]:
-    t, g = to_float(total), to_float(gp)
-    if t is None or not g:
+def _merge(div: str) -> dict[tuple, dict]:
+    """Fetch all categories and merge rows per (name, team)."""
+    players: dict[tuple, dict] = {}
+    for cid, mapping in CAT_MAP.items():
+        rows = _fetch_category(div, cid)
+        print(f"[ncaa-d2]   category {cid}: {len(rows)} rows")
+        for row in rows:
+            name = (row.get("Name") or "").strip()
+            team = (row.get("Team") or "").strip()
+            if not name or not team:
+                continue
+            key = (name.lower(), team.lower())
+            p = players.setdefault(key, {})
+            for k in IDENTITY:
+                if row.get(k) and not p.get(k):
+                    p[k] = row[k]
+            for field, col in mapping.items():
+                if row.get(col) not in (None, ""):
+                    p[field] = row[col]
+    return players
+
+
+def _eff(p: dict) -> tuple[Optional[float], Optional[float]]:
+    """eFG% and TS% (0-100) from season totals, when available."""
+    fgm, fga = to_float(p.get("_fgm")), to_float(p.get("_fga"))
+    fta, pts = to_float(p.get("_fta")), to_float(p.get("_pts"))
+    tfg = to_float(p.get("_3fg"))
+    efg = ts = None
+    if fga and fga > 0:
+        if fgm is not None and tfg is not None:
+            efg = round((fgm + 0.5 * tfg) / fga * 100, 2)
+        if pts is not None and fta is not None:
+            tsa = fga + 0.44 * fta
+            if tsa > 0:
+                ts = round(pts / (2 * tsa) * 100, 2)
+    return efg, ts
+
+
+def _frac(v) -> Optional[float]:
+    """ncaa.com percentages are 0-100; store shooting %s as 0-1 fractions
+    (matching the D1 Torvik fg2/fg3/ft values)."""
+    f = to_float(v)
+    return round(f / 100, 4) if f is not None else None
+
+
+def _build_record(p: dict, season: int) -> Optional[dict]:
+    name = (p.get("Name") or "").strip()
+    team = (p.get("Team") or "").strip()
+    if not name or not team:
         return None
-    return round(t / g, 4)
-
-
-def _pct100(frac) -> Optional[float]:
-    """Library reports rates as 0..1 fractions; our schema stores TS%/eFG%/TOV%
-    on a 0..100 scale (matching the D1 Torvik values)."""
-    v = to_float(frac)
-    return round(v * 100, 2) if v is not None else None
-
-
-def _map_row(row: dict, season: int) -> Optional[dict]:
-    name = (str(_g(row, "player_full_name") or "")).strip()
-    if not name or name.lower() in ("player", "name", "total", "totals"):
-        return None
-    gp = to_float(_g(row, "GP"))
-    min_total = to_float(_g(row, "MP_total_seconds"))
-    min_pg = round((min_total / 60.0) / gp, 4) if (min_total and gp) else None
+    gp = to_float(p.get("G"))
+    tov_total = to_float(p.get("_to"))
+    tov_pg = round(tov_total / gp, 4) if (tov_total is not None and gp) else None
+    # Assists: prefer the APG leaderboard; else derive from the A/TO total.
+    ast_pg = to_float(p.get("ast_pg"))
+    if ast_pg is None and p.get("_ast") and gp:
+        ast_pg = round(to_float(p.get("_ast")) / gp, 4)
+    efg, ts = _eff(p)
     return {
         "name": name,
-        "team": (str(_g(row, "school_name") or "")).strip() or None,
-        "conference": (str(_g(row, "team_conference_name") or "")).strip() or None,
+        "team": team,
+        "conference": None,                 # ncaa.com leaderboards omit conference
         "division": "D2",
-        "class": normalize_class(_g(row, "player_class")),
-        "position": (str(_g(row, "player_position") or "")).strip() or None,
+        "class": normalize_class(p.get("Cl")),
+        "position": (p.get("Position") or "").strip() or None,
         "season": season,
         "gp": gp,
-        "min_pg": min_pg,
+        "min_pg": to_float(p.get("min_pg")),
         "min_pct": None,
-        "pts_pg": _per_game(_g(row, "PTS"), gp),
-        "reb_pg": _per_game(_g(row, "TRB"), gp),
-        "oreb_pg": _per_game(_g(row, "ORB"), gp),
-        "dreb_pg": _per_game(_g(row, "DRB"), gp),
+        "pts_pg": to_float(p.get("pts_pg")),
+        "reb_pg": to_float(p.get("reb_pg")),
+        "oreb_pg": to_float(p.get("oreb_pg")),
+        "dreb_pg": to_float(p.get("dreb_pg")),
         "orb_pct": None,
         "drb_pct": None,
-        "ast_pg": _per_game(_g(row, "AST"), gp),
+        "ast_pg": ast_pg,
         "ast_pct": None,
-        "stl_pg": _per_game(_g(row, "STL"), gp),
-        "blk_pg": _per_game(_g(row, "BLK"), gp),
-        "tov_pg": _per_game(_g(row, "TOV"), gp),
-        "to_pct": _pct100(_g(row, "TOV%")),
+        "stl_pg": to_float(p.get("stl_pg")),
+        "blk_pg": to_float(p.get("blk_pg")),
+        "tov_pg": tov_pg,
+        "to_pct": None,
         "blk_pct": None,
         "stl_pct": None,
-        "fg_pct": to_float(_g(row, "FG%")),
-        "fg2_pct": to_float(_g(row, "2P%", "2FG%")),
-        "fg3_pct": to_float(_g(row, "3P%", "3FG%")),
-        "ft_pct": to_float(_g(row, "FT%")),
+        "fg_pct": _frac(p.get("fg_pct")),
+        "fg2_pct": None,
+        "fg3_pct": _frac(p.get("fg3_pct")),
+        "ft_pct": _frac(p.get("ft_pct")),
         "fg3a_rate": None,
         "fta_rate": None,
-        "efg_pct": _pct100(_g(row, "eFG%")),
-        "ts_pct": _pct100(_g(row, "TS%")),
+        "efg_pct": efg,
+        "ts_pct": ts,
         "usage": None,
         "ortg": None,
         "drtg": None,
         "bpm": None,
-        "torvik_pid": _slug(name),     # career-link key (name-based for D2)
-        "height_in": parse_height_to_inches(_g(row, "player_height")),
-        "weight_lb": to_float(_g(row, "player_weight")),
+        "torvik_pid": _slug(name),
+        "height_in": parse_height_to_inches(p.get("Height")),
+        "weight_lb": None,
         "dunk_rate": None,
         "rim_rate": None,
-        "source": "stats.ncaa.org",
+        "source": "ncaa.com",
     }
 
 
-def _install_ncaa_proxy() -> None:
-    """stats.ncaa.org returns HTTP 403 to datacenter IPs (GitHub runners), so we
-    reroute the library's single fetch point (``_get_webpage``) through a read
-    proxy that renders from a real browser (r.jina.ai), with allorigins as a
-    fallback. Same trick the D1 Torvik build uses for CloudFront. A polite delay
-    keeps us under the proxy's free rate limit. Direct is tried first in case a
-    given environment isn't blocked. Override via NCAA_FETCH_PROXIES."""
-    import os
-    import time
-    from urllib.parse import quote
-
-    import requests
-    from ncaa_stats_py import basketball as _bb
-    from ncaa_stats_py import utls as _utls
-
-    templates = [t for t in os.environ.get(
-        "NCAA_FETCH_PROXIES",
-        "https://r.jina.ai/{rawurl} https://api.allorigins.win/raw?url={url}",
-    ).split() if t]
-    ua = {"User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    )}
-    delay = float(os.environ.get("NCAA_FETCH_DELAY", "3.0"))
-
-    def fetch(url: str):
-        candidates = [(url, ua)]
-        for t in templates:
-            pu = t.replace("{rawurl}", url).replace("{url}", quote(url, safe=""))
-            h = dict(ua)
-            if "r.jina.ai" in t:
-                h["X-Return-Format"] = "html"   # raw HTML, not reformatted markdown
-            candidates.append((pu, h))
-        last = None
-        for cu, h in candidates:
-            try:
-                resp = requests.get(cu, headers=h, timeout=(10, 75))
-                if resp.status_code == 200 and resp.text and resp.text.strip():
-                    time.sleep(delay)           # politeness / rate-limit guard
-                    return resp
-                last = f"HTTP {resp.status_code}"
-            except Exception as exc:
-                last = f"{type(exc).__name__}: {exc}"
-        raise ConnectionRefusedError(f"[ncaa-d2 proxy] all candidates failed for {url}: {last}")
-
-    _utls._get_webpage = fetch
-    _bb._get_webpage = fetch
-    print(f"[ncaa-d2] fetch proxy installed (direct -> {templates}, delay={delay}s)")
-
-
 def fetch_players(season: int) -> list[dict]:
-    # Imported lazily so the rest of the app never needs pandas/ncaa_stats_py.
-    from ncaa_stats_py.basketball import (
-        get_basketball_player_season_stats,
-        get_basketball_teams,
-    )
-    _install_ncaa_proxy()
-
-    teams = get_basketball_teams(season=season, level=2)  # men's D2
-    team_ids = [int(t) for t in teams["team_id"].tolist()]
-    print(f"[ncaa-d2] season {season}: {len(team_ids)} D2 teams to scrape")
-
-    out: list[dict] = []
-    for i, tid in enumerate(team_ids, 1):
-        try:
-            df = get_basketball_player_season_stats(tid)
-        except Exception as exc:  # one bad team must not kill the whole build
-            print(f"[ncaa-d2]   team {tid} failed: {exc}")
-            continue
-        rows = df.to_dict("records") if df is not None and not df.empty else []
-        for row in rows:
-            rec = _map_row(row, season)
-            if rec:
-                out.append(rec)
-        if i % 25 == 0 or i == len(team_ids):
-            print(f"[ncaa-d2]   {i}/{len(team_ids)} teams, {len(out)} players so far")
+    merged = _merge("d2")
+    out = []
+    for p in merged.values():
+        rec = _build_record(p, season)
+        if rec:
+            out.append(rec)
+    print(f"[ncaa-d2] merged into {len(out)} distinct players")
     return out
 
 
@@ -229,21 +239,21 @@ def upsert_players(records: list[dict]) -> int:
 
 def ingest(season: int) -> None:
     init_db()
-    print(f"[ncaa-d2] ingesting D2 players for {season} ...")
+    print(f"[ncaa-d2] ingesting D2 players (ncaa.com current season, stamped {season}) ...")
     players = fetch_players(season)
     if not players:
         raise RuntimeError(
-            f"NCAA returned no D2 players for {season} (blocked or layout changed). "
+            "ncaa.com returned no D2 players (API down or layout changed). "
             "Refusing to commit empty data."
         )
     n = upsert_players(players)
-    print(f"[ncaa-d2] wrote {n} D2 player rows for {season}")
+    print(f"[ncaa-d2] wrote {n} D2 player rows")
     _sanity_check(season)
 
 
 def ingest_many(seasons: list[int]) -> None:
-    for s in seasons:
-        ingest(s)
+    # ncaa.com only serves the current season; use the latest requested.
+    ingest(max(seasons))
 
 
 def _sanity_check(season: int) -> None:
@@ -253,31 +263,24 @@ def _sanity_check(season: int) -> None:
         ).fetchone()["c"]
         print(f"[sanity] D2 {season}: {total} players")
         top = conn.execute(
-            """SELECT name, team, conference, pts_pg FROM players
+            """SELECT name, team, pts_pg, ts_pct FROM players
                WHERE division='D2' AND season=? AND pts_pg IS NOT NULL
                ORDER BY pts_pg DESC LIMIT 5""",
             (season,),
         ).fetchall()
-        if top:
-            print("[sanity] top D2 scorers:")
-            for r in top:
-                print(f"   {r['name']:<24} {str(r['team']):<20} {str(r['conference']):<10} {r['pts_pg']} ppg")
-        else:
-            print("[sanity] no pts_pg populated — column mapping likely changed")
+        for r in top:
+            print(f"   {r['name']:<22} {str(r['team']):<20} {r['pts_pg']} ppg  TS%={r['ts_pct']}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="NCAA Division II ingestion (stats.ncaa.org)")
-    ap.add_argument("--season", type=int, help="single season, e.g. 2026")
-    ap.add_argument("--seasons", type=int, nargs="+",
-                    help="multiple seasons, e.g. --seasons 2023 2024 2025 2026")
+    ap = argparse.ArgumentParser(description="NCAA Division II ingestion (ncaa.com)")
+    ap.add_argument("--season", type=int, default=2026)
+    ap.add_argument("--seasons", type=int, nargs="+")
     args = ap.parse_args()
     if args.seasons:
         ingest_many(args.seasons)
-    elif args.season:
-        ingest(args.season)
     else:
-        ap.error("provide --season or --seasons")
+        ingest(args.season)
 
 
 if __name__ == "__main__":
