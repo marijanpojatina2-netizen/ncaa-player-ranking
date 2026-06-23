@@ -18,12 +18,9 @@
     <p id="status" class="text-xs text-slate-400 mb-3">Učitavam podatke…</p>
 
     <!-- Top selects -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+    <div class="grid grid-cols-3 gap-2 mb-3">
       <label class="text-xs">Sezona
         <select id="season" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
-      </label>
-      <label class="text-xs">Pozicija
-        <select id="position" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
       </label>
       <label class="text-xs">Godina (class)
         <select id="cls" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
@@ -32,6 +29,9 @@
         <select id="sortby" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
       </label>
     </div>
+    <!-- Position chips (multi-select) -->
+    <div class="text-xs mb-1">Pozicija <span class="text-slate-500">(tapni više; ništa = sve)</span></div>
+    <div id="position" class="flex flex-wrap gap-1.5 mb-3"></div>
     <input id="search" placeholder="🔎 traži po imenu ili ekipi…"
            class="w-full bg-slate-800 rounded p-2 text-sm mb-3" />
 
@@ -76,6 +76,7 @@ const COLS = [
 const MAX_ROWS = 300;
 let PLAYERS = [];
 const state = {};
+const selectedPos = new Set(); // empty = all positions
 
 function ht(inch){ if(inch==null) return ''; const f=Math.floor(inch/12), i=Math.round(inch-12*f); return f+"'"+i+'"'; }
 function fmtVal(v, c){ if(v==null) return '—'; if(c.fmt==='ht') return ht(v); if(c.n!=null) return Number(v).toFixed(c.n); return v; }
@@ -103,6 +104,30 @@ function fillSelect(id, vals, allLabel){
   el.innerHTML = `<option value="">${allLabel}</option>` + vals.map(v=>`<option>${v}</option>`).join('');
 }
 
+function buildPosChips(vals){
+  const wrap=document.getElementById('position');
+  wrap.innerHTML='';
+  vals.forEach(v=>{
+    const b=document.createElement('button');
+    b.type='button'; b.dataset.pos=v; b.textContent=v;
+    b.className='px-3 py-1 rounded-full text-sm bg-slate-800 text-slate-300 border border-slate-700';
+    b.addEventListener('click',()=>{
+      if(selectedPos.has(v)) selectedPos.delete(v); else selectedPos.add(v);
+      paintPosChips(); render();
+    });
+    wrap.appendChild(b);
+  });
+  paintPosChips();
+}
+function paintPosChips(){
+  document.querySelectorAll('#position button').forEach(b=>{
+    const on=selectedPos.has(b.dataset.pos);
+    b.className='px-3 py-1 rounded-full text-sm border '+
+      (on?'bg-emerald-500 text-slate-900 border-emerald-400 font-semibold'
+         :'bg-slate-800 text-slate-300 border-slate-700');
+  });
+}
+
 function passes(p){
   for(const s of SLIDERS){
     const v=p[s.key];
@@ -110,7 +135,7 @@ function passes(p){
     else { if(state[s.key]<s.max && (v==null || v>state[s.key])) return false; }
   }
   if(season.value && String(p.season)!==season.value) return false;
-  if(position.value && p.position!==position.value) return false;
+  if(selectedPos.size && !selectedPos.has(p.position)) return false;
   if(cls.value && p.class!==cls.value) return false;
   const q=search.value.trim().toLowerCase();
   if(q && !((p.name||'').toLowerCase().includes(q) || (p.team||'').toLowerCase().includes(q))) return false;
@@ -128,11 +153,12 @@ function render(){
     COLS.map(c=>`<td class="px-2 py-1 ${typeof p[c.key]==='number'?'text-right font-mono':''}">${fmtVal(p[c.key],c)}</td>`).join('')+`</tr>`).join('');
 }
 
-['season','position','cls','sortby','search'].forEach(id=>
+['season','cls','sortby','search'].forEach(id=>
   document.addEventListener('input', e=>{ if(e.target.id===id) render(); }));
 
 document.getElementById('reset').addEventListener('click', ()=>{
-  season.value=''; position.value=''; cls.value=''; search.value='';
+  season.value=''; cls.value=''; search.value='';
+  selectedPos.clear(); paintPosChips();
   buildSliders(); render();
 });
 
@@ -142,7 +168,7 @@ document.getElementById('reset').addEventListener('click', ()=>{
     PLAYERS = d.players || d;
     document.getElementById('thead').innerHTML = COLS.map(c=>`<th class="px-2 py-1 text-left">${c.label}</th>`).join('');
     fillSelect('season', [...new Set(PLAYERS.map(p=>p.season))].sort((a,b)=>b-a), 'Sve sezone');
-    fillSelect('position', [...new Set(PLAYERS.map(p=>p.position).filter(Boolean))].sort(), 'Sve pozicije');
+    buildPosChips([...new Set(PLAYERS.map(p=>p.position).filter(Boolean))].sort());
     fillSelect('cls', ['Fr','So','Jr','Sr'], 'Sve godine');
     sortby.innerHTML = COLS.filter(c=>c.n!=null||c.key==='bpm'||c.key==='ts_pct')
       .map(c=>`<option value="${c.key}">${c.label}</option>`).join('');
