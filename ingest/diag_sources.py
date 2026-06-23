@@ -1,11 +1,10 @@
-"""One-off diagnostic: from a GitHub runner, probe candidate NCAA data sources
-and report which are reachable and return *parseable* content. Lets us pick a
-reliable D2 fetch path without blind trial-and-error. Prints status + key markers.
-Run via .github/workflows/d2-diag.yml. Not part of the app.
+"""One-off diagnostic v2: ncaa.com is directly reachable from the runner. Find
+WHERE the stats data lives (embedded JSON / data API) and extract the real D2
+men's basketball stat-category IDs. Run via .github/workflows/d2-diag.yml.
 """
 from __future__ import annotations
 
-from urllib.parse import quote
+import re
 
 import requests
 
@@ -14,42 +13,53 @@ UA = {"User-Agent": (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )}
 
-CANDIDATES = [
-    # label, url, extra headers, marker to look for in body
-    ("direct stats.ncaa.org/teams/history",
-     "https://stats.ncaa.org/teams/history", {}, "org_id_select"),
-    ("direct ncaa.com d2 scoring leaderboard",
-     "https://www.ncaa.com/stats/basketball-men/d2/current/individual/147", {}, "<table"),
-    ("henrygd hosted api d2 individual/147",
-     "https://ncaa-api.henrygd.me/stats/basketball-men/d2/current/individual/147", {}, "\"data\""),
-    ("jina html of stats.ncaa.org/teams/history",
-     "https://r.jina.ai/https://stats.ncaa.org/teams/history",
-     {"X-Return-Format": "html"}, "org_id_select"),
-    ("jina html of ncaa.com d2 scoring",
-     "https://r.jina.ai/https://www.ncaa.com/stats/basketball-men/d2/current/individual/147",
-     {"X-Return-Format": "html"}, "<table"),
-    ("allorigins raw stats.ncaa.org/teams/history",
-     "https://api.allorigins.win/raw?url=" + quote("https://stats.ncaa.org/teams/history", safe=""),
-     {}, "org_id_select"),
-]
+PAGE = "https://www.ncaa.com/stats/basketball-men/d2/current/individual/147"
 
 
 def main():
-    for label, url, extra, marker in CANDIDATES:
-        h = {**UA, **extra}
-        try:
-            r = requests.get(url, headers=h, timeout=(10, 60))
-            body = r.text or ""
-            has = marker in body
-            low = body.lower()
-            blocked = any(s in low for s in (
-                "access denied", "request could not be satisfied", "are you a robot",
-                "captcha", "cloudflare", "incapsula", "forbidden", "just a moment"))
-            print(f"\n=== {label}")
-            print(f"    HTTP {r.status_code}, {len(body)} bytes, marker[{marker!r}]={has}, blockish={blocked}")
-            print(f"    head: {body[:240].replace(chr(10),' ')!r}")
-        except Exception as exc:
-            print(f"\n=== {label}\n    ERROR {type(exc).__name__}: {exc}")
+    r = requests.get(PAGE, headers=UA, timeout=(10, 60))
+    b = r.text or ""
+    print(f"PAGE {PAGE}\nHTTP {r.status_code}, {len(b)} bytes\n")
+
+    markers = ["__NEXT_DATA__", "application/json", "application/ld+json",
+               "data.ncaa.com", "casablanca", "<table", "<tbody", "window.__",
+               "stats_player", "Rank", "/json/", "RPG", "PPG"]
+    print("MARKERS:")
+    for m in markers:
+        print(f"  {m!r}: {b.count(m)}")
+
+    # Stat-category dropdown options: /stats/basketball-men/d2/current/(individual|team)/<id>
+    cats = re.findall(
+        r'/stats/basketball-men/d2/current/(individual|team)/(\d+)"[^>]*>([^<]{1,40})',
+        b)
+    seen = set()
+    print(f"\nCATEGORY LINKS ({len(cats)} raw):")
+    for kind, cid, label in cats:
+        key = (kind, cid)
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"  {kind}/{cid}  {label.strip()!r}")
+
+    # If Next.js, dump a slice of __NEXT_DATA__
+    i = b.find("__NEXT_DATA__")
+    if i != -1:
+        print("\n__NEXT_DATA__ slice:")
+        print(b[i:i + 1200])
+
+    # Any obvious data API URL referenced
+    apis = sorted(set(re.findall(r'https?://[a-z0-9.\-]*ncaa\.com[^\s"\'<>]{0,80}', b)))
+    print(f"\nNCAA URLs referenced ({len(apis)}):")
+    for u in apis[:40]:
+        print("  " + u)
+
+    # Window around first occurrence of a stat word, to see how rows are encoded
+    for probe in ("Rank", "PPG", "<tbody", "json"):
+        j = b.find(probe)
+        if j != -1:
+            print(f"\n--- window around {probe!r} @ {j} ---")
+            print(b[j - 200:j + 600].replace("\n", " "))
+            break
 
 
 if __name__ == "__main__":
