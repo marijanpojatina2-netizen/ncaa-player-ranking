@@ -16,6 +16,10 @@
     <h1 class="text-lg sm:text-xl font-bold mb-1">🏀 NCAA Player Filter
       <span class="text-slate-400 text-xs font-normal">— sam filtriraj podatke sliderima</span>
     </h1>
+    <div id="divtoggle" class="inline-flex rounded-lg overflow-hidden border border-slate-700 mb-2">
+      <button data-div="D1" class="px-4 py-1.5 text-sm font-semibold">Division I</button>
+      <button data-div="D2" class="px-4 py-1.5 text-sm font-semibold">Division II</button>
+    </div>
     <p id="status" class="text-xs text-slate-400 mb-3">Učitavam podatke…</p>
 
     <!-- Top selects -->
@@ -70,63 +74,86 @@
   </div>
 
 <script>
-// Each slider: key, label, min, max, step, and direction ('min' = keep >= value, 'max' = keep <= value).
-const SLIDERS = [
-  {key:'pts_pg',   label:'Poeni / ut (min)',     min:0,  max:28, step:0.5, dir:'min'},
-  {key:'reb_pg',   label:'Skokovi / ut (min)',   min:0,  max:14, step:0.5, dir:'min'},
-  {key:'ast_pg',   label:'Asist. / ut (min)',    min:0,  max:10, step:0.5, dir:'min'},
-  {key:'stl_pg',   label:'Ukradene / ut (min)',  min:0,  max:3.5,step:0.1, dir:'min'},
-  {key:'blk_pg',   label:'Blokade / ut (min)',   min:0,  max:4.5,step:0.1, dir:'min'},
-  {key:'min_pg',   label:'Minute / ut (min)',    min:0,  max:40, step:1,   dir:'min'},
-  {key:'ts_pct',   label:'True Shooting % (min)',min:0,  max:75, step:1,   dir:'min'},
-  {key:'bpm',      label:'BPM (min)',            min:-8, max:8,  step:0.5, dir:'min'},
-  {key:'height_in',label:'Visina (min)',         min:60, max:90, step:1,   dir:'min', fmt:'ht'},
-  {key:'to_pct',   label:'Turnover % (max)',     min:0,  max:40, step:1,   dir:'max'},
-];
-// Columns shown in the table.
-const COLS = [
-  {key:'name',label:'Igrač'},{key:'team',label:'Ekipa'},{key:'position',label:'Poz'},
-  {key:'class',label:'Cls'},{key:'pts_pg',label:'PTS',n:1},{key:'reb_pg',label:'REB',n:1},
-  {key:'ast_pg',label:'AST',n:1},{key:'stl_pg',label:'STL',n:1},{key:'blk_pg',label:'BLK',n:1},
-  {key:'min_pg',label:'MIN',n:1},{key:'ts_pct',label:'TS%',n:1},{key:'bpm',label:'BPM',n:1},
-  {key:'height_in',label:'HT',fmt:'ht'},
-];
-// Detail rows shown in the per-player modal (all seasons as columns).
-// t: num0/num1 = number, pct100 = value already 0-100, frac = value 0-1 -> %, text, ht
-const DETAIL = [
-  {key:'team',label:'Ekipa',t:'text'},
-  {key:'class',label:'Godina (class)',t:'text'},
-  {key:'conference',label:'Konferencija',t:'text'},
-  {key:'gp',label:'Utakmice',t:'num0'},
-  {key:'min_pg',label:'Minute / ut',t:'num1'},
-  {key:'pts_pg',label:'Poeni / ut',t:'num1'},
-  {key:'reb_pg',label:'Skokovi / ut',t:'num1'},
-  {key:'oreb_pg',label:'Napadački skok / ut',t:'num1'},
-  {key:'dreb_pg',label:'Obrambeni skok / ut',t:'num1'},
-  {key:'ast_pg',label:'Asistencije / ut',t:'num1'},
-  {key:'stl_pg',label:'Ukradene / ut',t:'num1'},
-  {key:'blk_pg',label:'Blokade / ut',t:'num1'},
-  {key:'to_pct',label:'Turnover %',t:'pct100'},
-  {key:'fg2_pct',label:'2P %',t:'frac'},
-  {key:'fg3_pct',label:'3P %',t:'frac'},
-  {key:'ft_pct',label:'Slobodna bacanja %',t:'frac'},
-  {key:'efg_pct',label:'eFG %',t:'pct100'},
-  {key:'ts_pct',label:'True Shooting %',t:'pct100'},
-  {key:'usage',label:'Usage %',t:'pct100'},
-  {key:'ortg',label:'ORtg (napadački)',t:'num1'},
-  {key:'drtg',label:'DRtg (obrambeni)',t:'num1'},
-  {key:'bpm',label:'BPM',t:'num1'},
-  {key:'orb_pct',label:'ORB %',t:'pct100'},
-  {key:'drb_pct',label:'DRB %',t:'pct100'},
-  {key:'ast_pct',label:'AST %',t:'pct100'},
-  {key:'stl_pct',label:'STL %',t:'pct100'},
-  {key:'blk_pct',label:'BLK %',t:'pct100'},
-  {key:'height_in',label:'Visina',t:'ht'},
-  {key:'weight_lb',label:'Težina (lb)',t:'num0'},
-];
+// Per-division config. D2 (ncaa.com box scores) has no free advanced metrics
+// (BPM/usage/ORtg/DRtg/rate%), so those sliders/columns/detail-rows are dropped.
+const CONFIG = {
+  D1: {
+    file:'./data.json', note:'Bart Torvik + ESPN',
+    sliders:[
+      {key:'pts_pg',   label:'Poeni / ut (min)',     min:0,  max:28, step:0.5, dir:'min'},
+      {key:'reb_pg',   label:'Skokovi / ut (min)',   min:0,  max:14, step:0.5, dir:'min'},
+      {key:'ast_pg',   label:'Asist. / ut (min)',    min:0,  max:10, step:0.5, dir:'min'},
+      {key:'stl_pg',   label:'Ukradene / ut (min)',  min:0,  max:3.5,step:0.1, dir:'min'},
+      {key:'blk_pg',   label:'Blokade / ut (min)',   min:0,  max:4.5,step:0.1, dir:'min'},
+      {key:'min_pg',   label:'Minute / ut (min)',    min:0,  max:40, step:1,   dir:'min'},
+      {key:'ts_pct',   label:'True Shooting % (min)',min:0,  max:75, step:1,   dir:'min'},
+      {key:'bpm',      label:'BPM (min)',            min:-8, max:8,  step:0.5, dir:'min'},
+      {key:'height_in',label:'Visina (min)',         min:60, max:90, step:1,   dir:'min', fmt:'ht'},
+      {key:'to_pct',   label:'Turnover % (max)',     min:0,  max:40, step:1,   dir:'max'},
+    ],
+    cols:[
+      {key:'name',label:'Igrač'},{key:'team',label:'Ekipa'},{key:'position',label:'Poz'},
+      {key:'class',label:'Cls'},{key:'pts_pg',label:'PTS',n:1},{key:'reb_pg',label:'REB',n:1},
+      {key:'ast_pg',label:'AST',n:1},{key:'stl_pg',label:'STL',n:1},{key:'blk_pg',label:'BLK',n:1},
+      {key:'min_pg',label:'MIN',n:1},{key:'ts_pct',label:'TS%',n:1},{key:'bpm',label:'BPM',n:1},
+      {key:'height_in',label:'HT',fmt:'ht'},
+    ],
+    detail:[
+      {key:'team',label:'Ekipa',t:'text'},{key:'class',label:'Godina (class)',t:'text'},
+      {key:'conference',label:'Konferencija',t:'text'},{key:'gp',label:'Utakmice',t:'num0'},
+      {key:'min_pg',label:'Minute / ut',t:'num1'},{key:'pts_pg',label:'Poeni / ut',t:'num1'},
+      {key:'reb_pg',label:'Skokovi / ut',t:'num1'},{key:'oreb_pg',label:'Napadački skok / ut',t:'num1'},
+      {key:'dreb_pg',label:'Obrambeni skok / ut',t:'num1'},{key:'ast_pg',label:'Asistencije / ut',t:'num1'},
+      {key:'stl_pg',label:'Ukradene / ut',t:'num1'},{key:'blk_pg',label:'Blokade / ut',t:'num1'},
+      {key:'to_pct',label:'Turnover %',t:'pct100'},{key:'fg2_pct',label:'2P %',t:'frac'},
+      {key:'fg3_pct',label:'3P %',t:'frac'},{key:'ft_pct',label:'Slobodna bacanja %',t:'frac'},
+      {key:'efg_pct',label:'eFG %',t:'pct100'},{key:'ts_pct',label:'True Shooting %',t:'pct100'},
+      {key:'usage',label:'Usage %',t:'pct100'},{key:'ortg',label:'ORtg (napadački)',t:'num1'},
+      {key:'drtg',label:'DRtg (obrambeni)',t:'num1'},{key:'bpm',label:'BPM',t:'num1'},
+      {key:'orb_pct',label:'ORB %',t:'pct100'},{key:'drb_pct',label:'DRB %',t:'pct100'},
+      {key:'ast_pct',label:'AST %',t:'pct100'},{key:'stl_pct',label:'STL %',t:'pct100'},
+      {key:'blk_pct',label:'BLK %',t:'pct100'},{key:'height_in',label:'Visina',t:'ht'},
+      {key:'weight_lb',label:'Težina (lb)',t:'num0'},
+    ],
+  },
+  D2: {
+    file:'./data_d2.json', note:'ncaa.com (službene NCAA ljestvice)',
+    sliders:[
+      {key:'pts_pg',   label:'Poeni / ut (min)',     min:0,  max:28, step:0.5, dir:'min'},
+      {key:'reb_pg',   label:'Skokovi / ut (min)',   min:0,  max:14, step:0.5, dir:'min'},
+      {key:'ast_pg',   label:'Asist. / ut (min)',    min:0,  max:10, step:0.5, dir:'min'},
+      {key:'stl_pg',   label:'Ukradene / ut (min)',  min:0,  max:3.5,step:0.1, dir:'min'},
+      {key:'blk_pg',   label:'Blokade / ut (min)',   min:0,  max:4.5,step:0.1, dir:'min'},
+      {key:'min_pg',   label:'Minute / ut (min)',    min:0,  max:40, step:1,   dir:'min'},
+      {key:'ts_pct',   label:'True Shooting % (min)',min:0,  max:75, step:1,   dir:'min'},
+      {key:'height_in',label:'Visina (min)',         min:60, max:90, step:1,   dir:'min', fmt:'ht'},
+    ],
+    cols:[
+      {key:'name',label:'Igrač'},{key:'team',label:'Ekipa'},{key:'position',label:'Poz'},
+      {key:'class',label:'Cls'},{key:'pts_pg',label:'PTS',n:1},{key:'reb_pg',label:'REB',n:1},
+      {key:'ast_pg',label:'AST',n:1},{key:'stl_pg',label:'STL',n:1},{key:'blk_pg',label:'BLK',n:1},
+      {key:'min_pg',label:'MIN',n:1},{key:'ts_pct',label:'TS%',n:1},{key:'fg3_pct',label:'3P%',pct:true},
+      {key:'height_in',label:'HT',fmt:'ht'},
+    ],
+    detail:[
+      {key:'team',label:'Ekipa',t:'text'},{key:'class',label:'Godina (class)',t:'text'},
+      {key:'gp',label:'Utakmice',t:'num0'},{key:'min_pg',label:'Minute / ut',t:'num1'},
+      {key:'pts_pg',label:'Poeni / ut',t:'num1'},{key:'reb_pg',label:'Skokovi / ut',t:'num1'},
+      {key:'oreb_pg',label:'Napadački skok / ut',t:'num1'},{key:'dreb_pg',label:'Obrambeni skok / ut',t:'num1'},
+      {key:'ast_pg',label:'Asistencije / ut',t:'num1'},{key:'stl_pg',label:'Ukradene / ut',t:'num1'},
+      {key:'blk_pg',label:'Blokade / ut',t:'num1'},{key:'tov_pg',label:'Izgubljene lopte / ut',t:'num1'},
+      {key:'fg_pct',label:'Šut iz polja %',t:'frac'},{key:'fg3_pct',label:'3P %',t:'frac'},
+      {key:'ft_pct',label:'Slobodna bacanja %',t:'frac'},{key:'efg_pct',label:'eFG %',t:'pct100'},
+      {key:'ts_pct',label:'True Shooting %',t:'pct100'},{key:'height_in',label:'Visina',t:'ht'},
+    ],
+  },
+};
+let DIV='D1';
+let SLIDERS=CONFIG.D1.sliders, COLS=CONFIG.D1.cols, DETAIL=CONFIG.D1.detail;
+const DATASETS={}; // division -> {players, src}
 const MAX_ROWS = 300;
 let PLAYERS = [];
-const byPid = {}; // torvik_pid -> [season rows]
+const byPid = {}; // career-link id -> [season rows]
 const state = {};
 const selectedPos = new Set(); // empty = all positions
 
@@ -164,7 +191,7 @@ function openPlayer(pid){
 function closeModal(){ document.getElementById('modal').classList.add('hidden'); }
 
 function ht(inch){ if(inch==null) return ''; const f=Math.floor(inch/12), i=Math.round(inch-12*f); return f+"'"+i+'"'; }
-function fmtVal(v, c){ if(v==null) return '—'; if(c.fmt==='ht') return ht(v); if(c.n!=null) return Number(v).toFixed(c.n); return v; }
+function fmtVal(v, c){ if(v==null) return '—'; if(c.fmt==='ht') return ht(v); if(c.pct) return (Number(v)*100).toFixed(1)+'%'; if(c.n!=null) return Number(v).toFixed(c.n); return v; }
 
 function buildSliders(){
   const wrap = document.getElementById('sliders');
@@ -270,26 +297,58 @@ document.getElementById('reset').addEventListener('click', ()=>{
   buildSliders(); render();
 });
 
-(async function(){
-  try{
-    const d = await fetch('./data.json').then(r=>r.json());
-    PLAYERS = d.players || d;
-    PLAYERS.forEach(p=>{ (byPid[p.torvik_pid] = byPid[p.torvik_pid] || []).push(p); });
-    document.getElementById('thead').innerHTML = COLS.map(c=>`<th class="px-2 py-1 text-left">${c.label}</th>`).join('');
-    fillSelect('season', [...new Set(PLAYERS.map(p=>p.season))].sort((a,b)=>b-a), 'Sve sezone');
-    buildPosChips([...new Set(PLAYERS.map(p=>p.position).filter(Boolean))].sort());
-    fillSelect('cls', ['Fr','So','Jr','Sr'], 'Sve godine');
-    sortby.innerHTML = COLS.filter(c=>c.n!=null||c.key==='bpm'||c.key==='ts_pct')
-      .map(c=>`<option value="${c.key}">${c.label}</option>`).join('');
-    season.value = String(Math.max(...PLAYERS.map(p=>p.season))); // default latest season
-    buildSliders();
-    document.getElementById('status').textContent =
-      `Učitano ${PLAYERS.length.toLocaleString()} igrača (${d.generated_from||'Bart Torvik + ESPN'}). Sve filtriranje je u tvom pregledniku.`;
-    render();
-  }catch(e){
-    document.getElementById('status').textContent = 'Greška pri učitavanju data.json: '+e;
+function paintDivToggle(){
+  document.querySelectorAll('#divtoggle button').forEach(b=>{
+    const on=b.dataset.div===DIV;
+    b.className='px-4 py-1.5 text-sm font-semibold '+
+      (on?'bg-emerald-500 text-slate-900':'bg-slate-800 text-slate-300 hover:bg-slate-700');
+  });
+}
+
+async function loadDivision(div){
+  DIV=div;
+  const cfg=CONFIG[div];
+  SLIDERS=cfg.sliders; COLS=cfg.cols; DETAIL=cfg.detail;
+  paintDivToggle();
+  const status=document.getElementById('status');
+  if(!DATASETS[div]){
+    status.textContent=`Učitavam ${div} podatke…`;
+    try{
+      const d=await fetch(cfg.file).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+      DATASETS[div]={players:d.players||d, src:d.generated_from||cfg.note};
+    }catch(e){
+      status.textContent=(div==='D2')
+        ? 'D2 podaci još nisu izgrađeni (data_d2.json nedostaje) — build se vrti, pokušaj za koju minutu.'
+        : 'Greška pri učitavanju podataka: '+e;
+      DATASETS[div]=null;
+      document.getElementById('tbody').innerHTML=''; document.getElementById('count').textContent='';
+      return;
+    }
   }
-})();
+  if(!DATASETS[div]) return;
+  PLAYERS=DATASETS[div].players;
+  for(const k in byPid) delete byPid[k];
+  PLAYERS.forEach(p=>{ (byPid[p.torvik_pid] = byPid[p.torvik_pid] || []).push(p); });
+  selectedPos.clear(); search.value=''; cls.value='';
+  document.getElementById('thead').innerHTML = COLS.map(c=>`<th class="px-2 py-1 text-left">${c.label}</th>`).join('');
+  fillSelect('season', [...new Set(PLAYERS.map(p=>p.season))].sort((a,b)=>b-a), 'Sve sezone');
+  buildPosChips([...new Set(PLAYERS.map(p=>p.position).filter(Boolean))].sort());
+  fillSelect('cls', ['Fr','So','Jr','Sr'], 'Sve godine');
+  sortby.innerHTML = COLS.filter(c=>c.n!=null||c.key==='bpm'||c.key==='ts_pct')
+    .map(c=>`<option value="${c.key}">${c.label}</option>`).join('');
+  season.value = String(Math.max(...PLAYERS.map(p=>p.season)));
+  buildSliders();
+  status.textContent =
+    `${div} — učitano ${PLAYERS.length.toLocaleString()} igrača (${DATASETS[div].src}). Sve filtriranje je u tvom pregledniku.`;
+  render();
+}
+
+document.getElementById('divtoggle').addEventListener('click', e=>{
+  const b=e.target.closest('button[data-div]');
+  if(b && b.dataset.div!==DIV) loadDivision(b.dataset.div);
+});
+
+loadDivision(new URLSearchParams(location.search).get('div')==='D2' ? 'D2' : 'D1');
 </script>
 </body>
 </html>

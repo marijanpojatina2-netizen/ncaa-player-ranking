@@ -26,7 +26,7 @@ def export(out_path: Path = DEFAULT_OUT, division: str = "D1") -> int:
         confs = [dict(r) for r in conn.execute(
             "SELECT conference, division, season, strength_rating, rank FROM conferences "
             "WHERE division=?", (division,))]
-    src = "barttorvik + espn rosters" if division == "D1" else "stats.ncaa.org (official NCAA box scores)"
+    src = "barttorvik + espn rosters" if division == "D1" else "ncaa.com (official NCAA leaderboards)"
     payload = {
         "generated_from": src,
         "division": division,
