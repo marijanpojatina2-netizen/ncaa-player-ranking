@@ -29,8 +29,10 @@ USER_AGENT = (
     "Chrome/124.0 Safari/537.36 ncaa-scouting-tool/1.0 (personal scouting use)"
 )
 MIN_DELAY = 1.5          # seconds between live requests
-MAX_RETRIES = 4
+MAX_RETRIES = 3
 TIMEOUT = 30
+HARD_FETCH_CAP = 120     # max wall-clock seconds to spend on one request body
+MAX_BYTES = 12_000_000   # safety cap on a single response
 
 # barttorvik.com intermittently blocks datacenter IPs (e.g. GitHub-hosted
 # runners) with HTTP 403. When that happens we route ONLY barttorvik requests
@@ -133,10 +135,23 @@ def fetch(
             if elapsed < min_delay:
                 time.sleep(min_delay - elapsed)
             try:
-                resp = requests.get(cand, headers=req_headers, timeout=timeout)
-                _last_request_ts = time.time()
+                resp = requests.get(cand, headers=req_headers, timeout=timeout, stream=True)
                 resp.raise_for_status()
-                text = resp.text
+                # Read the body with a hard wall-clock cap so a proxy that
+                # accepts the connection then trickles bytes (throttled jina)
+                # can't hang the whole job.
+                start = time.time()
+                buf = bytearray()
+                for chunk in resp.iter_content(65536):
+                    if chunk:
+                        buf.extend(chunk)
+                    if time.time() - start > HARD_FETCH_CAP:
+                        raise RuntimeError(f"exceeded {HARD_FETCH_CAP}s body cap")
+                    if len(buf) > MAX_BYTES:
+                        break
+                resp.close()
+                _last_request_ts = time.time()
+                text = buf.decode(resp.encoding or "utf-8", "replace")
                 if not text.strip():
                     raise RuntimeError("empty response body")
                 if use_proxy and not _looks_like_csv(text):
