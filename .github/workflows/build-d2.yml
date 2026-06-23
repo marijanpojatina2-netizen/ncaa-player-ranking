@@ -1,0 +1,66 @@
+name: Build NCAA D2 database
+
+# Manual / phone-friendly build of the Division II dataset. GitHub-hosted
+# runners have open internet, so the scrape of the official NCAA stats portal
+# (stats.ncaa.org, via the ncaa_stats_py library) runs here. The portable JSON
+# export (web/data_d2.json) and the SQLite DB are committed back to main.
+#
+# Two ways to run it:
+#   * Actions tab -> "Run workflow" (workflow_dispatch), or
+#   * push a commit that touches .github/d2-build-trigger on main (handy from a
+#     phone: editing that file fires the build, which commits the data back).
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "Seasons to scrape (space-separated, e.g. 2026 or 2024 2025 2026)"
+        required: true
+        default: "2026"
+  push:
+    branches: [main]
+    paths:
+      - ".github/d2-build-trigger"
+
+permissions:
+  contents: write
+
+env:
+  SEASONS: ${{ github.event.inputs.seasons || '2026' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          # D2 ingest only: official NCAA scraper (pulls in pandas/bs4/lxml).
+          pip install "ncaa_stats_py>=0.0.12"
+
+      - name: Scrape NCAA D2 (stats.ncaa.org)
+        run: python -m ingest.ncaa_d2 --seasons $SEASONS
+
+      - name: Export portable D2 JSON
+        run: python -m ingest.export_json --division D2
+
+      - name: Commit built D2 database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/ncaa.db web/data_d2.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: build NCAA D2 DB for seasons $SEASONS"
+            git push origin HEAD:main
+          fi
