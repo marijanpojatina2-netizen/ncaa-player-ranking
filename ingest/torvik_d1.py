@@ -28,6 +28,7 @@ import argparse
 import csv
 import io
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -282,13 +283,18 @@ def ingest(season: int, refresh: bool = False) -> None:
         )
     n = upsert_players(players)
     print(f"[torvik] wrote {n} D1 player rows")
-    # Conference-strength aggregation needs trank.php, which the proxies often
-    # cannot return as CSV. It's a secondary feature, so never let it sink an
-    # otherwise-successful player ingest.
-    try:
-        build_conferences(season, refresh)
-    except Exception as exc:
-        print(f"[torvik] conference strength skipped for {season}: {exc}")
+    # Conference-strength aggregation needs trank.php, which CloudFront won't
+    # serve through the proxies (and retrying it per season is very slow). It's
+    # a secondary feature, so skip it by default; set BUILD_CONF_STRENGTH=1 to
+    # attempt it (e.g. when fetching directly works).
+    if os.environ.get("BUILD_CONF_STRENGTH") == "1":
+        try:
+            build_conferences(season, refresh)
+        except Exception as exc:
+            print(f"[torvik] conference strength skipped for {season}: {exc}")
+    else:
+        print(f"[torvik] conference strength disabled for {season} "
+              "(set BUILD_CONF_STRENGTH=1 to enable)")
     _sanity_check(season)
 
 

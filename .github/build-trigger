@@ -1,2 +1,2 @@
 Touch this file (change anything) and push to main to trigger a DB rebuild.
-Last trigger: 2026-06-23T00:09:14Z  (hard 120s body cap; keyless retry)
+Last trigger: 2026-06-23T00:21:37Z  (skip trank.php conf-strength; faster keyless)
