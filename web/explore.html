@@ -6,7 +6,8 @@
   <title>🏀 NCAA Filter — slajderi</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    input[type=range]{ width:100%; }
+    /* touch-action: pan-y => vertical drag scrolls the page, only horizontal drag moves the slider */
+    input[type=range]{ width:100%; touch-action:pan-y; height:26px; }
     th{ position:sticky; top:0; }
   </style>
 </head>
