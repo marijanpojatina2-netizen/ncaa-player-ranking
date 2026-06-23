@@ -44,11 +44,28 @@
       <button id="reset" class="text-xs bg-slate-700 hover:bg-slate-600 rounded px-3 py-1">Reset svih</button>
     </div>
 
+    <p class="text-xs text-slate-500 mt-1 mb-1">💡 tapni igrača za sve statistike po sezonama</p>
     <div class="overflow-auto rounded border border-slate-700" style="max-height:70vh">
       <table class="w-full text-xs sm:text-sm">
         <thead class="bg-slate-800 text-slate-300"><tr id="thead"></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Player detail modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-start justify-center p-3 overflow-auto">
+    <div class="bg-slate-800 rounded-lg max-w-3xl w-full p-4 my-4 border border-slate-700">
+      <div class="flex justify-between items-start mb-3">
+        <div>
+          <h2 id="m_name" class="text-lg font-bold"></h2>
+          <p id="m_sub" class="text-xs text-slate-400"></p>
+        </div>
+        <button id="m_close" class="text-slate-300 hover:text-white text-3xl leading-none px-2 -mt-1">&times;</button>
+      </div>
+      <div class="overflow-auto" style="max-height:75vh">
+        <table id="m_table" class="w-full text-xs sm:text-sm"></table>
+      </div>
     </div>
   </div>
 
@@ -74,10 +91,77 @@ const COLS = [
   {key:'min_pg',label:'MIN',n:1},{key:'ts_pct',label:'TS%',n:1},{key:'bpm',label:'BPM',n:1},
   {key:'height_in',label:'HT',fmt:'ht'},
 ];
+// Detail rows shown in the per-player modal (all seasons as columns).
+// t: num0/num1 = number, pct100 = value already 0-100, frac = value 0-1 -> %, text, ht
+const DETAIL = [
+  {key:'team',label:'Ekipa',t:'text'},
+  {key:'class',label:'Godina (class)',t:'text'},
+  {key:'conference',label:'Konferencija',t:'text'},
+  {key:'gp',label:'Utakmice',t:'num0'},
+  {key:'min_pg',label:'Minute / ut',t:'num1'},
+  {key:'pts_pg',label:'Poeni / ut',t:'num1'},
+  {key:'reb_pg',label:'Skokovi / ut',t:'num1'},
+  {key:'oreb_pg',label:'Napadački skok / ut',t:'num1'},
+  {key:'dreb_pg',label:'Obrambeni skok / ut',t:'num1'},
+  {key:'ast_pg',label:'Asistencije / ut',t:'num1'},
+  {key:'stl_pg',label:'Ukradene / ut',t:'num1'},
+  {key:'blk_pg',label:'Blokade / ut',t:'num1'},
+  {key:'to_pct',label:'Turnover %',t:'pct100'},
+  {key:'fg2_pct',label:'2P %',t:'frac'},
+  {key:'fg3_pct',label:'3P %',t:'frac'},
+  {key:'ft_pct',label:'Slobodna bacanja %',t:'frac'},
+  {key:'efg_pct',label:'eFG %',t:'pct100'},
+  {key:'ts_pct',label:'True Shooting %',t:'pct100'},
+  {key:'usage',label:'Usage %',t:'pct100'},
+  {key:'ortg',label:'ORtg (napadački)',t:'num1'},
+  {key:'drtg',label:'DRtg (obrambeni)',t:'num1'},
+  {key:'bpm',label:'BPM',t:'num1'},
+  {key:'orb_pct',label:'ORB %',t:'pct100'},
+  {key:'drb_pct',label:'DRB %',t:'pct100'},
+  {key:'ast_pct',label:'AST %',t:'pct100'},
+  {key:'stl_pct',label:'STL %',t:'pct100'},
+  {key:'blk_pct',label:'BLK %',t:'pct100'},
+  {key:'height_in',label:'Visina',t:'ht'},
+  {key:'weight_lb',label:'Težina (lb)',t:'num0'},
+];
 const MAX_ROWS = 300;
 let PLAYERS = [];
+const byPid = {}; // torvik_pid -> [season rows]
 const state = {};
 const selectedPos = new Set(); // empty = all positions
+
+function fmtDetail(v, t){
+  if(v==null || v==='') return '—';
+  switch(t){
+    case 'text':  return v;
+    case 'num0':  return Math.round(v);
+    case 'num1':  return Number(v).toFixed(1);
+    case 'pct100':return Number(v).toFixed(1)+'%';
+    case 'frac':  return (Number(v)*100).toFixed(1)+'%';
+    case 'ht':    return ht(v);
+    default:      return v;
+  }
+}
+
+function openPlayer(pid){
+  const rows=(byPid[pid]||[]).slice().sort((a,b)=>a.season-b.season);
+  if(!rows.length) return;
+  const last=rows[rows.length-1];
+  const n=rows.length;
+  document.getElementById('m_name').textContent = last.name;
+  document.getElementById('m_sub').textContent =
+    `${last.position||'?'} · ${ht(last.height_in)||'?'} · ${n} ${n===1?'sezona':(n<5?'sezone':'sezona')} u bazi`;
+  let html='<thead><tr class="text-slate-400 bg-slate-800"><th class="text-left px-2 py-1 sticky left-0 bg-slate-800">Statistika</th>'+
+    rows.map(r=>`<th class="text-right px-2 py-1">${r.season}</th>`).join('')+'</tr></thead><tbody>';
+  DETAIL.forEach(d=>{
+    html+=`<tr class="odd:bg-slate-900/40"><td class="px-2 py-1 text-slate-300 sticky left-0 odd:bg-slate-900/40 even:bg-slate-800">${d.label}</td>`+
+      rows.map(r=>`<td class="px-2 py-1 text-right font-mono">${fmtDetail(r[d.key],d.t)}</td>`).join('')+'</tr>';
+  });
+  html+='</tbody>';
+  document.getElementById('m_table').innerHTML=html;
+  document.getElementById('modal').classList.remove('hidden');
+}
+function closeModal(){ document.getElementById('modal').classList.add('hidden'); }
 
 function ht(inch){ if(inch==null) return ''; const f=Math.floor(inch/12), i=Math.round(inch-12*f); return f+"'"+i+'"'; }
 function fmtVal(v, c){ if(v==null) return '—'; if(c.fmt==='ht') return ht(v); if(c.n!=null) return Number(v).toFixed(c.n); return v; }
@@ -164,9 +248,18 @@ function render(){
   document.getElementById('count').textContent =
     `${rows.length} igrača odgovara` + (rows.length>MAX_ROWS?` (prikazano prvih ${MAX_ROWS})`:``);
   const tb=document.getElementById('tbody');
-  tb.innerHTML = rows.slice(0,MAX_ROWS).map(p=>`<tr class="odd:bg-slate-800/40">`+
+  tb.innerHTML = rows.slice(0,MAX_ROWS).map(p=>`<tr data-pid="${p.torvik_pid}" class="odd:bg-slate-800/40 cursor-pointer hover:bg-emerald-900/40">`+
     COLS.map(c=>`<td class="px-2 py-1 ${typeof p[c.key]==='number'?'text-right font-mono':''}">${fmtVal(p[c.key],c)}</td>`).join('')+`</tr>`).join('');
 }
+
+// Open detail modal when a row is tapped.
+document.getElementById('tbody').addEventListener('click', e=>{
+  const tr=e.target.closest('tr[data-pid]');
+  if(tr) openPlayer(tr.dataset.pid);
+});
+document.getElementById('m_close').addEventListener('click', closeModal);
+document.getElementById('modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 
 ['season','cls','sortby','search'].forEach(id=>
   document.addEventListener('input', e=>{ if(e.target.id===id) render(); }));
@@ -181,6 +274,7 @@ document.getElementById('reset').addEventListener('click', ()=>{
   try{
     const d = await fetch('./data.json').then(r=>r.json());
     PLAYERS = d.players || d;
+    PLAYERS.forEach(p=>{ (byPid[p.torvik_pid] = byPid[p.torvik_pid] || []).push(p); });
     document.getElementById('thead').innerHTML = COLS.map(c=>`<th class="px-2 py-1 text-left">${c.label}</th>`).join('');
     fillSelect('season', [...new Set(PLAYERS.map(p=>p.season))].sort((a,b)=>b-a), 'Sve sezone');
     buildPosChips([...new Set(PLAYERS.map(p=>p.position).filter(Boolean))].sort());
