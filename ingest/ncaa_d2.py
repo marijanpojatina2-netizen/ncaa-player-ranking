@@ -126,12 +126,63 @@ def _map_row(row: dict, season: int) -> Optional[dict]:
     }
 
 
+def _install_ncaa_proxy() -> None:
+    """stats.ncaa.org returns HTTP 403 to datacenter IPs (GitHub runners), so we
+    reroute the library's single fetch point (``_get_webpage``) through a read
+    proxy that renders from a real browser (r.jina.ai), with allorigins as a
+    fallback. Same trick the D1 Torvik build uses for CloudFront. A polite delay
+    keeps us under the proxy's free rate limit. Direct is tried first in case a
+    given environment isn't blocked. Override via NCAA_FETCH_PROXIES."""
+    import os
+    import time
+    from urllib.parse import quote
+
+    import requests
+    from ncaa_stats_py import basketball as _bb
+    from ncaa_stats_py import utls as _utls
+
+    templates = [t for t in os.environ.get(
+        "NCAA_FETCH_PROXIES",
+        "https://r.jina.ai/{rawurl} https://api.allorigins.win/raw?url={url}",
+    ).split() if t]
+    ua = {"User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )}
+    delay = float(os.environ.get("NCAA_FETCH_DELAY", "3.0"))
+
+    def fetch(url: str):
+        candidates = [(url, ua)]
+        for t in templates:
+            pu = t.replace("{rawurl}", url).replace("{url}", quote(url, safe=""))
+            h = dict(ua)
+            if "r.jina.ai" in t:
+                h["X-Return-Format"] = "html"   # raw HTML, not reformatted markdown
+            candidates.append((pu, h))
+        last = None
+        for cu, h in candidates:
+            try:
+                resp = requests.get(cu, headers=h, timeout=(10, 75))
+                if resp.status_code == 200 and resp.text and resp.text.strip():
+                    time.sleep(delay)           # politeness / rate-limit guard
+                    return resp
+                last = f"HTTP {resp.status_code}"
+            except Exception as exc:
+                last = f"{type(exc).__name__}: {exc}"
+        raise ConnectionRefusedError(f"[ncaa-d2 proxy] all candidates failed for {url}: {last}")
+
+    _utls._get_webpage = fetch
+    _bb._get_webpage = fetch
+    print(f"[ncaa-d2] fetch proxy installed (direct -> {templates}, delay={delay}s)")
+
+
 def fetch_players(season: int) -> list[dict]:
     # Imported lazily so the rest of the app never needs pandas/ncaa_stats_py.
     from ncaa_stats_py.basketball import (
         get_basketball_player_season_stats,
         get_basketball_teams,
     )
+    _install_ncaa_proxy()
 
     teams = get_basketball_teams(season=season, level=2)  # men's D2
     team_ids = [int(t) for t in teams["team_id"].tolist()]
