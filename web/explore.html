@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🏀 NCAA Filter — slajderi</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    input[type=range]{ width:100%; }
+    th{ position:sticky; top:0; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100">
+  <div class="max-w-6xl mx-auto p-3">
+    <h1 class="text-lg sm:text-xl font-bold mb-1">🏀 NCAA Player Filter
+      <span class="text-slate-400 text-xs font-normal">— sam filtriraj podatke sliderima</span>
+    </h1>
+    <p id="status" class="text-xs text-slate-400 mb-3">Učitavam podatke…</p>
+
+    <!-- Top selects -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+      <label class="text-xs">Sezona
+        <select id="season" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
+      </label>
+      <label class="text-xs">Pozicija
+        <select id="position" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
+      </label>
+      <label class="text-xs">Godina (class)
+        <select id="cls" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
+      </label>
+      <label class="text-xs">Sortiraj po
+        <select id="sortby" class="w-full mt-1 bg-slate-800 rounded p-1.5 text-sm"></select>
+      </label>
+    </div>
+    <input id="search" placeholder="🔎 traži po imenu ili ekipi…"
+           class="w-full bg-slate-800 rounded p-2 text-sm mb-3" />
+
+    <!-- Sliders -->
+    <div id="sliders" class="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-3 mb-4"></div>
+
+    <div class="flex items-center justify-between mb-2">
+      <span id="count" class="text-sm font-semibold"></span>
+      <button id="reset" class="text-xs bg-slate-700 hover:bg-slate-600 rounded px-3 py-1">Reset svih</button>
+    </div>
+
+    <div class="overflow-auto rounded border border-slate-700" style="max-height:70vh">
+      <table class="w-full text-xs sm:text-sm">
+        <thead class="bg-slate-800 text-slate-300"><tr id="thead"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+// Each slider: key, label, min, max, step, and direction ('min' = keep >= value, 'max' = keep <= value).
+const SLIDERS = [
+  {key:'pts_pg',   label:'Poeni / ut (min)',     min:0,  max:28, step:0.5, dir:'min'},
+  {key:'reb_pg',   label:'Skokovi / ut (min)',   min:0,  max:14, step:0.5, dir:'min'},
+  {key:'ast_pg',   label:'Asist. / ut (min)',    min:0,  max:10, step:0.5, dir:'min'},
+  {key:'stl_pg',   label:'Ukradene / ut (min)',  min:0,  max:3.5,step:0.1, dir:'min'},
+  {key:'blk_pg',   label:'Blokade / ut (min)',   min:0,  max:4.5,step:0.1, dir:'min'},
+  {key:'min_pg',   label:'Minute / ut (min)',    min:0,  max:40, step:1,   dir:'min'},
+  {key:'ts_pct',   label:'True Shooting % (min)',min:0,  max:75, step:1,   dir:'min'},
+  {key:'bpm',      label:'BPM (min)',            min:-8, max:8,  step:0.5, dir:'min'},
+  {key:'height_in',label:'Visina (min)',         min:60, max:90, step:1,   dir:'min', fmt:'ht'},
+  {key:'to_pct',   label:'Turnover % (max)',     min:0,  max:40, step:1,   dir:'max'},
+];
+// Columns shown in the table.
+const COLS = [
+  {key:'name',label:'Igrač'},{key:'team',label:'Ekipa'},{key:'position',label:'Poz'},
+  {key:'class',label:'Cls'},{key:'pts_pg',label:'PTS',n:1},{key:'reb_pg',label:'REB',n:1},
+  {key:'ast_pg',label:'AST',n:1},{key:'stl_pg',label:'STL',n:1},{key:'blk_pg',label:'BLK',n:1},
+  {key:'min_pg',label:'MIN',n:1},{key:'ts_pct',label:'TS%',n:1},{key:'bpm',label:'BPM',n:1},
+  {key:'height_in',label:'HT',fmt:'ht'},
+];
+const MAX_ROWS = 300;
+let PLAYERS = [];
+const state = {};
+
+function ht(inch){ if(inch==null) return ''; const f=Math.floor(inch/12), i=Math.round(inch-12*f); return f+"'"+i+'"'; }
+function fmtVal(v, c){ if(v==null) return '—'; if(c.fmt==='ht') return ht(v); if(c.n!=null) return Number(v).toFixed(c.n); return v; }
+
+function buildSliders(){
+  const wrap = document.getElementById('sliders');
+  wrap.innerHTML = '';
+  SLIDERS.forEach(s=>{
+    state[s.key] = s.dir==='max' ? s.max : s.min; // default = no filter
+    const id='s_'+s.key;
+    const div=document.createElement('div');
+    div.innerHTML = `<div class="flex justify-between text-xs mb-1">
+        <span>${s.label}</span><span id="${id}_v" class="text-emerald-400 font-mono"></span></div>
+        <input type="range" id="${id}" min="${s.min}" max="${s.max}" step="${s.step}" value="${state[s.key]}">`;
+    wrap.appendChild(div);
+    const inp=div.querySelector('input');
+    const upd=()=>{ state[s.key]=parseFloat(inp.value);
+      document.getElementById(id+'_v').textContent = (s.fmt==='ht'?ht(state[s.key]):state[s.key]); render(); };
+    inp.addEventListener('input', upd); upd();
+  });
+}
+
+function fillSelect(id, vals, allLabel){
+  const el=document.getElementById(id);
+  el.innerHTML = `<option value="">${allLabel}</option>` + vals.map(v=>`<option>${v}</option>`).join('');
+}
+
+function passes(p){
+  for(const s of SLIDERS){
+    const v=p[s.key];
+    if(s.dir==='min'){ if(state[s.key]>s.min && (v==null || v<state[s.key])) return false; }
+    else { if(state[s.key]<s.max && (v==null || v>state[s.key])) return false; }
+  }
+  if(season.value && String(p.season)!==season.value) return false;
+  if(position.value && p.position!==position.value) return false;
+  if(cls.value && p.class!==cls.value) return false;
+  const q=search.value.trim().toLowerCase();
+  if(q && !((p.name||'').toLowerCase().includes(q) || (p.team||'').toLowerCase().includes(q))) return false;
+  return true;
+}
+
+function render(){
+  const sk=sortby.value||'pts_pg';
+  let rows=PLAYERS.filter(passes);
+  rows.sort((a,b)=>((b[sk]??-1e9)-(a[sk]??-1e9)));
+  document.getElementById('count').textContent =
+    `${rows.length} igrača odgovara` + (rows.length>MAX_ROWS?` (prikazano prvih ${MAX_ROWS})`:``);
+  const tb=document.getElementById('tbody');
+  tb.innerHTML = rows.slice(0,MAX_ROWS).map(p=>`<tr class="odd:bg-slate-800/40">`+
+    COLS.map(c=>`<td class="px-2 py-1 ${typeof p[c.key]==='number'?'text-right font-mono':''}">${fmtVal(p[c.key],c)}</td>`).join('')+`</tr>`).join('');
+}
+
+['season','position','cls','sortby','search'].forEach(id=>
+  document.addEventListener('input', e=>{ if(e.target.id===id) render(); }));
+
+document.getElementById('reset').addEventListener('click', ()=>{
+  season.value=''; position.value=''; cls.value=''; search.value='';
+  buildSliders(); render();
+});
+
+(async function(){
+  try{
+    const d = await fetch('./data.json').then(r=>r.json());
+    PLAYERS = d.players || d;
+    document.getElementById('thead').innerHTML = COLS.map(c=>`<th class="px-2 py-1 text-left">${c.label}</th>`).join('');
+    fillSelect('season', [...new Set(PLAYERS.map(p=>p.season))].sort((a,b)=>b-a), 'Sve sezone');
+    fillSelect('position', [...new Set(PLAYERS.map(p=>p.position).filter(Boolean))].sort(), 'Sve pozicije');
+    fillSelect('cls', ['Fr','So','Jr','Sr'], 'Sve godine');
+    sortby.innerHTML = COLS.filter(c=>c.n!=null||c.key==='bpm'||c.key==='ts_pct')
+      .map(c=>`<option value="${c.key}">${c.label}</option>`).join('');
+    season.value = String(Math.max(...PLAYERS.map(p=>p.season))); // default latest season
+    buildSliders();
+    document.getElementById('status').textContent =
+      `Učitano ${PLAYERS.length.toLocaleString()} igrača (${d.generated_from||'Bart Torvik + ESPN'}). Sve filtriranje je u tvom pregledniku.`;
+    render();
+  }catch(e){
+    document.getElementById('status').textContent = 'Greška pri učitavanju data.json: '+e;
+  }
+})();
+</script>
+</body>
+</html>
