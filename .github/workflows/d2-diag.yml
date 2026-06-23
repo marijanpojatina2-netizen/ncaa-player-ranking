@@ -1,7 +1,8 @@
 name: Diagnose NCAA D2 sources
 
-# Throwaway diagnostic: probes which NCAA data source is reachable/parseable from
-# a GitHub runner. Trigger by touching .github/d2-diag-trigger. Read the logs.
+# Throwaway diagnostic: dumps the raw ncaa.com D2 stats page to data/diag/ and
+# commits it, so it can be analyzed locally. Trigger by touching
+# .github/d2-diag-trigger.
 
 on:
   workflow_dispatch:
@@ -11,7 +12,7 @@ on:
       - ".github/d2-diag-trigger"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   diag:
@@ -25,5 +26,16 @@ jobs:
           python-version: "3.11"
       - name: Install requests
         run: pip install requests
-      - name: Probe sources
+      - name: Dump sources
         run: python -m ingest.diag_sources
+      - name: Commit diag artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/diag/
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "diag: dump ncaa.com D2 stats page"
+            git push origin HEAD:main
+          fi

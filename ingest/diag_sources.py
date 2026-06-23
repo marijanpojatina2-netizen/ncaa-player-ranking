@@ -1,10 +1,11 @@
-"""One-off diagnostic v3: locate the player-rows data for a VALID individual D2
-category (136 = Points Per Game) on ncaa.com, and test the henrygd API for it.
-Concise output. Run via .github/workflows/d2-diag.yml.
+"""One-off diagnostic v4: dump the raw ncaa.com D2 stats page (category 136 =
+Points Per Game) to a file so it can be committed and analyzed locally (the
+sandbox can't reach ncaa.com). Also dump henrygd's response. Run via
+.github/workflows/d2-diag.yml, which commits data/diag/ back to the repo.
 """
 from __future__ import annotations
 
-import re
+import os
 
 import requests
 
@@ -15,42 +16,21 @@ UA = {"User-Agent": (
 
 NCAA = "https://www.ncaa.com/stats/basketball-men/d2/current/individual/136"
 HENRY = "https://ncaa-api.henrygd.me/stats/basketball-men/d2/current/individual/136"
+OUT = "data/diag"
 
 
 def main():
-    # 1) henrygd for a VALID category
-    try:
-        r = requests.get(HENRY, headers=UA, timeout=(10, 60))
-        print(f"HENRYGD /136: HTTP {r.status_code}, {len(r.text)} bytes")
-        print("  head:", repr(r.text[:500]))
-    except Exception as e:
-        print("HENRYGD error:", e)
-
-    # 2) ncaa.com embedded data
+    os.makedirs(OUT, exist_ok=True)
     r = requests.get(NCAA, headers=UA, timeout=(10, 60))
-    b = r.text or ""
-    print(f"\nNCAA /136: HTTP {r.status_code}, {len(b)} bytes")
-    for m in ('"Rank"', "Rank", '"player"', '"School"', '"Cls"', "stats_player",
-              "updated_at", '"data"', '"rows"', "so-stat", "tablesaw", "<table"):
-        print(f'  marker {m!r}: {b.count(m)}')
+    open(f"{OUT}/ncaa_136.html", "w", encoding="utf-8").write(r.text)
+    print(f"ncaa /136: HTTP {r.status_code}, {len(r.text)} bytes -> {OUT}/ncaa_136.html")
 
-    # full data.ncaa.com URLs (with path)
-    apis = sorted(set(re.findall(r'https?://data\.ncaa\.com[^\s"\'<>\\]*', b)))
-    print("  data.ncaa.com urls:", apis[:10])
-
-    # application/json script blocks
-    blocks = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', b, re.S)
-    print(f"  application/json blocks: {len(blocks)}")
-    for i, blk in enumerate(blocks):
-        print(f"  --- block {i}: {len(blk)} chars, head: {blk[:300]!r}")
-
-    # window around first interesting stat marker
-    for probe in ("tablesaw", "soial", "Rank", "player", "School"):
-        j = b.find(probe)
-        if j != -1:
-            print(f"\n--- window {probe!r} @ {j} ---")
-            print(b[j - 150:j + 700].replace("\n", " "))
-            break
+    try:
+        r2 = requests.get(HENRY, headers=UA, timeout=(10, 60))
+        open(f"{OUT}/henry_136.json", "w", encoding="utf-8").write(r2.text)
+        print(f"henrygd /136: HTTP {r2.status_code}, {len(r2.text)} bytes -> {OUT}/henry_136.json")
+    except Exception as e:
+        print("henrygd error:", e)
 
 
 if __name__ == "__main__":
