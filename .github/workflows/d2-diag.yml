@@ -1,0 +1,30 @@
+name: Diagnose NCAA D2 sources
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/d2-diag-trigger"
+
+permissions:
+  contents: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python -m ingest.diag_sources
+      - name: Commit diag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/diag/
+          git diff --cached --quiet || { git commit -m "diag: category coverage probe"; git push origin HEAD:main; }
