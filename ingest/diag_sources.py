@@ -1,6 +1,6 @@
-"""One-off diagnostic v2: ncaa.com is directly reachable from the runner. Find
-WHERE the stats data lives (embedded JSON / data API) and extract the real D2
-men's basketball stat-category IDs. Run via .github/workflows/d2-diag.yml.
+"""One-off diagnostic v3: locate the player-rows data for a VALID individual D2
+category (136 = Points Per Game) on ncaa.com, and test the henrygd API for it.
+Concise output. Run via .github/workflows/d2-diag.yml.
 """
 from __future__ import annotations
 
@@ -13,52 +13,43 @@ UA = {"User-Agent": (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )}
 
-PAGE = "https://www.ncaa.com/stats/basketball-men/d2/current/individual/147"
+NCAA = "https://www.ncaa.com/stats/basketball-men/d2/current/individual/136"
+HENRY = "https://ncaa-api.henrygd.me/stats/basketball-men/d2/current/individual/136"
 
 
 def main():
-    r = requests.get(PAGE, headers=UA, timeout=(10, 60))
+    # 1) henrygd for a VALID category
+    try:
+        r = requests.get(HENRY, headers=UA, timeout=(10, 60))
+        print(f"HENRYGD /136: HTTP {r.status_code}, {len(r.text)} bytes")
+        print("  head:", repr(r.text[:500]))
+    except Exception as e:
+        print("HENRYGD error:", e)
+
+    # 2) ncaa.com embedded data
+    r = requests.get(NCAA, headers=UA, timeout=(10, 60))
     b = r.text or ""
-    print(f"PAGE {PAGE}\nHTTP {r.status_code}, {len(b)} bytes\n")
+    print(f"\nNCAA /136: HTTP {r.status_code}, {len(b)} bytes")
+    for m in ('"Rank"', "Rank", '"player"', '"School"', '"Cls"', "stats_player",
+              "updated_at", '"data"', '"rows"', "so-stat", "tablesaw", "<table"):
+        print(f'  marker {m!r}: {b.count(m)}')
 
-    markers = ["__NEXT_DATA__", "application/json", "application/ld+json",
-               "data.ncaa.com", "casablanca", "<table", "<tbody", "window.__",
-               "stats_player", "Rank", "/json/", "RPG", "PPG"]
-    print("MARKERS:")
-    for m in markers:
-        print(f"  {m!r}: {b.count(m)}")
+    # full data.ncaa.com URLs (with path)
+    apis = sorted(set(re.findall(r'https?://data\.ncaa\.com[^\s"\'<>\\]*', b)))
+    print("  data.ncaa.com urls:", apis[:10])
 
-    # Stat-category dropdown options: /stats/basketball-men/d2/current/(individual|team)/<id>
-    cats = re.findall(
-        r'/stats/basketball-men/d2/current/(individual|team)/(\d+)"[^>]*>([^<]{1,40})',
-        b)
-    seen = set()
-    print(f"\nCATEGORY LINKS ({len(cats)} raw):")
-    for kind, cid, label in cats:
-        key = (kind, cid)
-        if key in seen:
-            continue
-        seen.add(key)
-        print(f"  {kind}/{cid}  {label.strip()!r}")
+    # application/json script blocks
+    blocks = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', b, re.S)
+    print(f"  application/json blocks: {len(blocks)}")
+    for i, blk in enumerate(blocks):
+        print(f"  --- block {i}: {len(blk)} chars, head: {blk[:300]!r}")
 
-    # If Next.js, dump a slice of __NEXT_DATA__
-    i = b.find("__NEXT_DATA__")
-    if i != -1:
-        print("\n__NEXT_DATA__ slice:")
-        print(b[i:i + 1200])
-
-    # Any obvious data API URL referenced
-    apis = sorted(set(re.findall(r'https?://[a-z0-9.\-]*ncaa\.com[^\s"\'<>]{0,80}', b)))
-    print(f"\nNCAA URLs referenced ({len(apis)}):")
-    for u in apis[:40]:
-        print("  " + u)
-
-    # Window around first occurrence of a stat word, to see how rows are encoded
-    for probe in ("Rank", "PPG", "<tbody", "json"):
+    # window around first interesting stat marker
+    for probe in ("tablesaw", "soial", "Rank", "player", "School"):
         j = b.find(probe)
         if j != -1:
-            print(f"\n--- window around {probe!r} @ {j} ---")
-            print(b[j - 200:j + 600].replace("\n", " "))
+            print(f"\n--- window {probe!r} @ {j} ---")
+            print(b[j - 150:j + 700].replace("\n", " "))
             break
 
 
