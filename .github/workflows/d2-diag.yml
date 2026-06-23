@@ -1,0 +1,29 @@
+name: Diagnose NCAA D2 sources
+
+# Throwaway diagnostic: probes which NCAA data source is reachable/parseable from
+# a GitHub runner. Trigger by touching .github/d2-diag-trigger. Read the logs.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/d2-diag-trigger"
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install requests
+        run: pip install requests
+      - name: Probe sources
+        run: python -m ingest.diag_sources
