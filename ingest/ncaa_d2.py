@@ -2,18 +2,16 @@
 
 There is NO free advanced-metric source for D2, and the complete portal
 (stats.ncaa.org) is behind bot-protection that blocks servers. ncaa.com's public
-stat pages ARE reachable, and expose per-category leaderboards as clean JSON via
-the ncaa-api proxy (henrygd). We fetch ~12 individual categories, merge them per
-player (by name + team), and compute shooting efficiency (eFG%, TS%) ourselves.
+stat pages ARE reachable and expose per-category leaderboards as clean JSON via
+the ncaa-api proxy (henrygd). Each leaderboard is capped at the ~250-300
+qualified players, so we merge MANY categories (per-game + season totals +
+shooting) by player to maximise both coverage and stat completeness, deriving
+per-game values from totals where a per-game board didn't rank the player, and
+computing eFG%/TS% ourselves.
 
-Limitations (be honest):
-  * Only players who QUALIFY for a leaderboard appear (NCAA minimums), i.e. the
-    better/higher-minute D2 players — not every roster player.
-  * A player only carries the stats for the leaderboards they ranked in, so a
-    pure scorer may have NULL rebounds, etc. Multi-category players are richest.
-  * Advanced metrics (BPM, usage, ORtg/DRtg, rate%) don't exist free for D2 ->
-    stored as NULL. We never fabricate stats.
-  * ncaa.com only serves the CURRENT season, so D2 is a single season.
+Limitations (honest): only players who rank in some leaderboard appear (the
+statistically notable D2 players, not every roster player); advanced metrics
+(BPM/usage/ORtg/DRtg/rate%) don't exist free for D2 -> NULL; current season only.
 
 Source: https://ncaa-api.henrygd.me  (mirrors www.ncaa.com/stats/...).
 Reachable from GitHub runners; blocked from the sandbox proxy.
@@ -36,22 +34,28 @@ API_BASE = os.environ.get("NCAA_API_BASE", "https://ncaa-api.henrygd.me")
 UA = {"User-Agent": "Mozilla/5.0 ncaa-scouting-tool/1.0 (personal scouting use)"}
 DELAY = float(os.environ.get("NCAA_API_DELAY", "0.4"))
 
-# Each individual category -> {our_field_or_tmpkey: ncaa_column}. Temp keys start
-# with "_" and are used only to compute efficiency; they are not stored directly.
-# NB: column NAMES collide across categories (e.g. "RPG" means total/off/def in
-# 137/856/858), so we map explicitly per category rather than blindly merging.
+# category id -> {temp_key: ncaa_column}. Temp keys (all start "_") are merged per
+# player; _build_record turns them into schema fields (per-game prefers the
+# *_pg board, else total/G). Column names collide across boards, so map per board.
 CAT_MAP: dict[int, dict[str, str]] = {
-    136: {"pts_pg": "PPG", "_fgm": "FGM", "_3fg": "3FG", "_ft": "FT", "_pts": "PTS"},
-    137: {"reb_pg": "RPG"},
-    140: {"ast_pg": "APG"},
-    139: {"stl_pg": "STPG"},
-    138: {"blk_pg": "BKPG"},
-    628: {"min_pg": "MPG"},
-    141: {"fg_pct": "FG%", "_fgm": "FGM", "_fga": "FGA"},
-    142: {"ft_pct": "FT%", "_fta": "FTA"},
-    143: {"fg3_pct": "3FG%", "_3fga": "3FGA"},
-    856: {"oreb_pg": "RPG"},
-    858: {"dreb_pg": "RPG"},
+    # --- per-game leaderboards (authoritative per-game value) ---
+    136: {"_ppg": "PPG", "_pts": "PTS", "_fgm": "FGM", "_3fg": "3FG", "_ft": "FT"},
+    137: {"_rpg": "RPG", "_reb": "REB"},
+    140: {"_apg": "APG", "_ast": "AST"},
+    139: {"_spg": "STPG", "_stl": "ST"},
+    138: {"_bpg": "BKPG", "_blk": "BLKS"},
+    628: {"_mpg": "MPG"},
+    856: {"_orpg": "RPG"},
+    858: {"_drpg": "RPG"},
+    # --- season-total leaderboards (breadth + per-game fallback + efficiency) ---
+    600: {"_pts": "PTS", "_fgm": "FGM", "_ft": "FT"},
+    601: {"_reb": "REB", "_oreb": "ORebs", "_dreb": "DRebs"},
+    605: {"_ast": "AST"},
+    608: {"_blk": "BLKS"},
+    615: {"_stl": "ST"},
+    611: {"_fgm": "FGM", "_fga": "FGA"},
+    850: {"_ft": "FT", "_fta": "FTA"},
+    621: {"_3fg": "3FG", "_3fga": "3FGA"},
     473: {"_ast": "AST", "_to": "TO"},
 }
 IDENTITY = ("Name", "Team", "Cl", "Height", "Position", "G")
@@ -74,7 +78,6 @@ def _slug(name: str) -> Optional[str]:
 
 
 def _fetch_category(div: str, cid: int) -> list[dict]:
-    """Fetch every page of one leaderboard category."""
     rows: list[dict] = []
     page, pages = 1, 1
     while page <= pages:
@@ -101,48 +104,34 @@ def _fetch_category(div: str, cid: int) -> list[dict]:
 
 
 def _merge(div: str) -> dict[tuple, dict]:
-    """Fetch all categories and merge rows per (name, team)."""
     players: dict[tuple, dict] = {}
     for cid, mapping in CAT_MAP.items():
         rows = _fetch_category(div, cid)
-        print(f"[ncaa-d2]   category {cid}: {len(rows)} rows")
+        print(f"[ncaa-d2]   category {cid}: {len(rows)} rows ({len(players)} players so far)")
         for row in rows:
             name = (row.get("Name") or "").strip()
             team = (row.get("Team") or "").strip()
             if not name or not team:
                 continue
-            key = (name.lower(), team.lower())
-            p = players.setdefault(key, {})
+            p = players.setdefault((name.lower(), team.lower()), {})
             for k in IDENTITY:
                 if row.get(k) and not p.get(k):
                     p[k] = row[k]
             for field, col in mapping.items():
-                if row.get(col) not in (None, ""):
-                    p[field] = row[col]
+                v = row.get(col)
+                if v not in (None, "") and not p.get(field):
+                    p[field] = v
     return players
 
 
-def _eff(p: dict) -> tuple[Optional[float], Optional[float]]:
-    """eFG% and TS% (0-100) from season totals, when available."""
-    fgm, fga = to_float(p.get("_fgm")), to_float(p.get("_fga"))
-    fta, pts = to_float(p.get("_fta")), to_float(p.get("_pts"))
-    tfg = to_float(p.get("_3fg"))
-    efg = ts = None
-    if fga and fga > 0:
-        if fgm is not None and tfg is not None:
-            efg = round((fgm + 0.5 * tfg) / fga * 100, 2)
-        if pts is not None and fta is not None:
-            tsa = fga + 0.44 * fta
-            if tsa > 0:
-                ts = round(pts / (2 * tsa) * 100, 2)
-    return efg, ts
+def _pg(p: dict, total_key: str, gp: Optional[float]) -> Optional[float]:
+    t = to_float(p.get(total_key))
+    return round(t / gp, 4) if (t is not None and gp) else None
 
 
-def _frac(v) -> Optional[float]:
-    """ncaa.com percentages are 0-100; store shooting %s as 0-1 fractions
-    (matching the D1 Torvik fg2/fg3/ft values)."""
-    f = to_float(v)
-    return round(f / 100, 4) if f is not None else None
+def _ratio(num, den) -> Optional[float]:
+    n, d = to_float(num), to_float(den)
+    return round(n / d, 4) if (n is not None and d) else None
 
 
 def _build_record(p: dict, season: int) -> Optional[dict]:
@@ -151,66 +140,52 @@ def _build_record(p: dict, season: int) -> Optional[dict]:
     if not name or not team:
         return None
     gp = to_float(p.get("G"))
-    tov_total = to_float(p.get("_to"))
-    tov_pg = round(tov_total / gp, 4) if (tov_total is not None and gp) else None
-    # Assists: prefer the APG leaderboard; else derive from the A/TO total.
-    ast_pg = to_float(p.get("ast_pg"))
-    if ast_pg is None and p.get("_ast") and gp:
-        ast_pg = round(to_float(p.get("_ast")) / gp, 4)
-    efg, ts = _eff(p)
+    # Per-game: prefer the per-game board's value, else derive from the total.
+    pts_pg = to_float(p.get("_ppg")) or _pg(p, "_pts", gp)
+    reb_pg = to_float(p.get("_rpg")) or _pg(p, "_reb", gp)
+    ast_pg = to_float(p.get("_apg")) or _pg(p, "_ast", gp)
+    stl_pg = to_float(p.get("_spg")) or _pg(p, "_stl", gp)
+    blk_pg = to_float(p.get("_bpg")) or _pg(p, "_blk", gp)
+    oreb_pg = to_float(p.get("_orpg")) or _pg(p, "_oreb", gp)
+    dreb_pg = to_float(p.get("_drpg")) or _pg(p, "_dreb", gp)
+    min_pg = to_float(p.get("_mpg"))
+    tov_pg = _pg(p, "_to", gp)
+    # Shooting % (fractions) from totals.
+    fg_pct = _ratio(p.get("_fgm"), p.get("_fga"))
+    fg3_pct = _ratio(p.get("_3fg"), p.get("_3fga"))
+    ft_pct = _ratio(p.get("_ft"), p.get("_fta"))
+    # Efficiency (0-100) from totals when the inputs are present.
+    fgm, fga = to_float(p.get("_fgm")), to_float(p.get("_fga"))
+    fta, pts, tfg = to_float(p.get("_fta")), to_float(p.get("_pts")), to_float(p.get("_3fg"))
+    efg = round((fgm + 0.5 * tfg) / fga * 100, 2) if (fga and fgm is not None and tfg is not None) else None
+    ts = None
+    if fga and pts is not None and fta is not None:
+        tsa = fga + 0.44 * fta
+        if tsa > 0:
+            ts = round(pts / (2 * tsa) * 100, 2)
     return {
-        "name": name,
-        "team": team,
-        "conference": None,                 # ncaa.com leaderboards omit conference
-        "division": "D2",
+        "name": name, "team": team, "conference": None, "division": "D2",
         "class": normalize_class(p.get("Cl")),
         "position": (p.get("Position") or "").strip() or None,
-        "season": season,
-        "gp": gp,
-        "min_pg": to_float(p.get("min_pg")),
-        "min_pct": None,
-        "pts_pg": to_float(p.get("pts_pg")),
-        "reb_pg": to_float(p.get("reb_pg")),
-        "oreb_pg": to_float(p.get("oreb_pg")),
-        "dreb_pg": to_float(p.get("dreb_pg")),
-        "orb_pct": None,
-        "drb_pct": None,
-        "ast_pg": ast_pg,
-        "ast_pct": None,
-        "stl_pg": to_float(p.get("stl_pg")),
-        "blk_pg": to_float(p.get("blk_pg")),
-        "tov_pg": tov_pg,
-        "to_pct": None,
-        "blk_pct": None,
-        "stl_pct": None,
-        "fg_pct": _frac(p.get("fg_pct")),
-        "fg2_pct": None,
-        "fg3_pct": _frac(p.get("fg3_pct")),
-        "ft_pct": _frac(p.get("ft_pct")),
-        "fg3a_rate": None,
-        "fta_rate": None,
-        "efg_pct": efg,
-        "ts_pct": ts,
-        "usage": None,
-        "ortg": None,
-        "drtg": None,
-        "bpm": None,
+        "season": season, "gp": gp,
+        "min_pg": min_pg, "min_pct": None,
+        "pts_pg": pts_pg, "reb_pg": reb_pg, "oreb_pg": oreb_pg, "dreb_pg": dreb_pg,
+        "orb_pct": None, "drb_pct": None,
+        "ast_pg": ast_pg, "ast_pct": None, "stl_pg": stl_pg, "blk_pg": blk_pg,
+        "tov_pg": tov_pg, "to_pct": None, "blk_pct": None, "stl_pct": None,
+        "fg_pct": fg_pct, "fg2_pct": None, "fg3_pct": fg3_pct, "ft_pct": ft_pct,
+        "fg3a_rate": None, "fta_rate": None, "efg_pct": efg, "ts_pct": ts,
+        "usage": None, "ortg": None, "drtg": None, "bpm": None,
         "torvik_pid": _slug(name),
         "height_in": parse_height_to_inches(p.get("Height")),
-        "weight_lb": None,
-        "dunk_rate": None,
-        "rim_rate": None,
+        "weight_lb": None, "dunk_rate": None, "rim_rate": None,
         "source": "ncaa.com",
     }
 
 
 def fetch_players(season: int) -> list[dict]:
     merged = _merge("d2")
-    out = []
-    for p in merged.values():
-        rec = _build_record(p, season)
-        if rec:
-            out.append(rec)
+    out = [r for r in (_build_record(p, season) for p in merged.values()) if r]
     print(f"[ncaa-d2] merged into {len(out)} distinct players")
     return out
 
@@ -252,8 +227,7 @@ def ingest(season: int) -> None:
 
 
 def ingest_many(seasons: list[int]) -> None:
-    # ncaa.com only serves the current season; use the latest requested.
-    ingest(max(seasons))
+    ingest(max(seasons))   # ncaa.com only serves the current season
 
 
 def _sanity_check(season: int) -> None:
@@ -261,12 +235,14 @@ def _sanity_check(season: int) -> None:
         total = conn.execute(
             "SELECT COUNT(*) c FROM players WHERE division='D2' AND season=?", (season,)
         ).fetchone()["c"]
-        print(f"[sanity] D2 {season}: {total} players")
+        srs = conn.execute(
+            "SELECT COUNT(*) c FROM players WHERE division='D2' AND season=? AND class='Sr'", (season,)
+        ).fetchone()["c"]
+        print(f"[sanity] D2 {season}: {total} players ({srs} seniors)")
         top = conn.execute(
             """SELECT name, team, pts_pg, ts_pct FROM players
                WHERE division='D2' AND season=? AND pts_pg IS NOT NULL
-               ORDER BY pts_pg DESC LIMIT 5""",
-            (season,),
+               ORDER BY pts_pg DESC LIMIT 5""", (season,),
         ).fetchall()
         for r in top:
             print(f"   {r['name']:<22} {str(r['team']):<20} {r['pts_pg']} ppg  TS%={r['ts_pct']}")
@@ -277,10 +253,7 @@ def main():
     ap.add_argument("--season", type=int, default=2026)
     ap.add_argument("--seasons", type=int, nargs="+")
     args = ap.parse_args()
-    if args.seasons:
-        ingest_many(args.seasons)
-    else:
-        ingest(args.season)
+    ingest_many(args.seasons) if args.seasons else ingest(args.season)
 
 
 if __name__ == "__main__":
