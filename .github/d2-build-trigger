@@ -2,4 +2,4 @@ Touch this file (change anything) to trigger .github/workflows/build-d2.yml,
 which scrapes Division II box scores from stats.ncaa.org on a GitHub runner and
 commits web/data_d2.json back to main.
 
-build: 2026-06-23T01
+build: 2026-06-23T02 (via read proxy)
