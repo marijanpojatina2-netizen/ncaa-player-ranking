@@ -94,9 +94,23 @@ function buildSliders(){
         <input type="range" id="${id}" min="${s.min}" max="${s.max}" step="${s.step}" value="${state[s.key]}">`;
     wrap.appendChild(div);
     const inp=div.querySelector('input');
-    const upd=()=>{ state[s.key]=parseFloat(inp.value);
-      document.getElementById(id+'_v').textContent = (s.fmt==='ht'?ht(state[s.key]):state[s.key]); render(); };
-    inp.addEventListener('input', upd); upd();
+    const valEl=document.getElementById(id+'_v');
+    const apply=()=>{ state[s.key]=parseFloat(inp.value);
+      valEl.textContent = (s.fmt==='ht'?ht(state[s.key]):state[s.key]); render(); };
+    // Mobile guard: ignore taps and vertical (scroll) gestures.
+    // The slider value only changes on a clearly HORIZONTAL drag; otherwise we revert it.
+    let lock=false, sx=0, sy=0, sv=inp.value, decided=false;
+    inp.addEventListener('touchstart', e=>{
+      const t=e.touches[0]; sx=t.clientX; sy=t.clientY; sv=inp.value; decided=false; lock=true;
+    }, {passive:true});
+    inp.addEventListener('touchmove', e=>{
+      const t=e.touches[0], dx=Math.abs(t.clientX-sx), dy=Math.abs(t.clientY-sy);
+      if(!decided && (dx>8 || dy>8)){ decided=true; lock = dy>=dx; } // horizontal => unlock
+      if(lock) inp.value=sv; // keep reverting while it's a tap/scroll
+    }, {passive:true});
+    inp.addEventListener('touchend', ()=>{ lock=false; decided=false; });
+    inp.addEventListener('input', ()=>{ if(lock){ inp.value=sv; return; } apply(); });
+    apply();
   });
 }
 
