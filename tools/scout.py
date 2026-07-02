@@ -184,6 +184,69 @@ def d1_big(p: dict, bigs: list[dict], seniors: list[dict]) -> dict:
             "parts": {k: round(v * 100, 1) for k, v in parts.items()}}
 
 
+# ===================== D1 "buy the dip" =====================================
+def find_dips(players: list[dict], season: int) -> list[dict]:
+    """Seniors whose first 3 seasons were far better than their senior year.
+
+    The classic under-the-radar buy: a mid-major star transfers up (or gets
+    hurt), loses his role as a senior, and his market price follows the bad
+    senior line while the 3-year track record shows the real level. Criteria:
+    peak prior-season BPM >= 3.0 with real minutes, then a senior collapse
+    (BPM -2, or minutes% -25, or points -5). Ranked by peak BPM (what you buy).
+    """
+    by: dict[str, list[dict]] = {}
+    for p in players:
+        by.setdefault(p.get("torvik_pid"), []).append(p)
+    out = []
+    for s in players:
+        if s.get("class") != "Sr" or s.get("season") != season or (s.get("gp") or 0) < 5:
+            continue
+        hist = [q for q in by.get(s["torvik_pid"], [])
+                if q["season"] < season and (q.get("min_pct") or 0) >= 40
+                and (q.get("gp") or 0) >= 15]
+        if not hist:
+            continue
+        peak = max(hist, key=lambda q: q.get("bpm") or -99)
+        pb, cb = peak.get("bpm"), s.get("bpm")
+        if pb is None or cb is None or pb < 3.0:
+            continue
+        if (pb - cb >= 2.0
+                or (peak.get("min_pct") or 0) - (s.get("min_pct") or 0) >= 25
+                or (peak.get("pts_pg") or 0) - (s.get("pts_pg") or 0) >= 5):
+            out.append({"now": s, "peak": peak})
+    out.sort(key=lambda r: -(r["peak"].get("bpm") or 0))
+    return out
+
+
+def fmt_dip(r: dict) -> str:
+    s, pk = r["now"], r["peak"]
+    tr = "" if s["team"] == pk["team"] else f"  [{pk['team']} → {s['team']}]"
+    return (f"{s['name']:<22} {(s.get('position') or '?'):<10} {ht(s.get('height_in')):>5}"
+            f" peak'{pk['season'] % 100}: bpm={pk['bpm']:.1f} {num(pk.get('pts_pg'))}pts"
+            f" ts={num(pk.get('ts_pct'))} | '{s['season'] % 100}: bpm={s['bpm']:.1f}"
+            f" {num(s.get('pts_pg'))}pts min%={num(s.get('min_pct'), 0)}{tr}")
+
+
+def dip_card(i: int, r: dict) -> str:
+    s, pk = r["now"], r["peak"]
+    tr = ("" if s["team"] == pk["team"]
+          else f'<div class="row2">↪ transfer: {pk["team"]} → {s["team"]} (uloga nestala)</div>')
+    peak_line = (f"PEAK '{pk['season'] % 100} ({pk['team']}): {num(pk.get('pts_pg'))} pts · "
+                 f"TS {num(pk.get('ts_pct'))} · {num(pk.get('ast_pg'))} ast · "
+                 f"stl% {num(pk.get('stl_pct'))} · blk% {num(pk.get('blk_pct'))} · BPM {num(pk.get('bpm'))}")
+    now_line = (f"SADA '{s['season'] % 100}: {num(s.get('pts_pg'))} pts · min% {num(s.get('min_pct'), 0)} · "
+                f"BPM {num(s.get('bpm'))}")
+    return f"""<div class="card">
+  <div class="row1"><span class="rank">#{i}</span>
+    <span class="nm">{s['name']}</span>
+    <span class="steal">{pk['bpm']:.1f}</span></div>
+  <div class="row2">{s.get('position')} · {ht(s.get('height_in'))} · Sr · sada: {s['team']}</div>
+  {tr}
+  <div class="row3">{peak_line}</div>
+  <div class="row3" style="color:#f87171">{now_line}</div>
+</div>"""
+
+
 # ============================ output ========================================
 def fmt_row(r: dict, kind: str) -> str:
     p = r["player"]
@@ -238,10 +301,15 @@ def card(i, r, kind, div):
 </div>"""
 
 
-def html_report(sections: list[tuple[str, list, str]], top: int) -> str:
+def html_report(sections: list[tuple[str, list, str]], top: int, dips: list[dict]) -> str:
     body = "\n".join(
         f"<h2>{title}</h2>\n" + "\n".join(card(i, r, kind, title) for i, r in enumerate(scores[:top], 1))
         for title, scores, kind in sections)
+    body += ("\n<h2>D1 · 💎 BUY THE DIP — zvijezde prve 3 sezone, loša senior godina</h2>\n"
+             '<p class="sub">Mid-major zvijezda transferira na high-major, izgubi ulogu → cijena joj se '
+             "formira po lošoj senior sezoni, a 3-godišnji track record pokazuje pravu razinu. "
+             "Zelena brojka = peak BPM (što kupuješ). Obavezna provjera: razlog pada (uloga vs. ozljeda).</p>\n"
+             + "\n".join(dip_card(i, r) for i, r in enumerate(dips, 1)))
     return f"""<!DOCTYPE html>
 <html lang="hr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -303,12 +371,18 @@ def main():
             print(fmt_row(r, kind))
         print()
 
+    dips = find_dips(d1["players"], args.season)
+    print(f"=== D1 · BUY THE DIP — peak prve 3 sezone >> senior ({len(dips)}) ===")
+    for r in dips:
+        print(fmt_dip(r))
+    print()
+
     if args.json:
         args.json.write_text(json.dumps(
             {t: s[:max(args.top * 3, 50)] for t, s, _ in sections}, indent=1))
         print(f"wrote {args.json}")
     if args.html:
-        args.html.write_text(html_report(sections, args.top))
+        args.html.write_text(html_report(sections, args.top, dips))
         print(f"wrote {args.html}")
 
 
